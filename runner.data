@@ -228411,7 +228411,7 @@ room_goto_previous()
 }
   ž  draw_sprite(sprite_index, 0, x, y)
 draw_set_color(make_color_rgb(0xfb, 0x26, 0x51));
-draw_text(120, 200, "PORT BY BREADBB\n" + "gn-math.github.io");
+draw_text(120, 200, "PORT BY KANTASU\n" + "                 ");
 if (d == 1)
 {
 	draw_set_color(c_gray)
@@ -228480,7 +228480,7 @@ if (drawpw == 1)
 	if (pw3 == 1)
 		draw_text(20, 210, string_hash_to_newline(scr_gettext("obj_titleimage_activity_c")))
 }
-  '   url_open("https://gn-math.github.io/");    image_speed = 0
+  '   url_open("https://ddown325.github.io");    image_speed = 0
 con = 0
     8  if (con == 1)
 {
