@@ -18,6 +18,34 @@ play with no internet:
 - Saves live in your browser's storage on that machine (Chrome/Edge recommended).
 - More info on the [releases page](https://github.com/ddown325/Undertale-HTML/releases).
 
+## Custom content in this build
+
+Besides the vanilla game, this build adds a few extras:
+
+**More Sans death dialogue (genocide route).** Sans's rematch intro now has
+unique lines for deaths 12 through 17 — he used to run out of material after
+11 — and past 18 deaths he rotates through a set of one-liners instead of
+always saying the same thing. He also has extra taunts during the long haul
+of his fight (turn 24+).
+
+**Equipment set bonuses.** Wearing a matching weapon + armor pair from the
+same area gives a small bonus, shown when you equip it and included in your
+AT/DF stats:
+
+| Set | Bonus |
+|---|---|
+| Stick + Bandage | DEF +1 |
+| Toy Knife + Faded Ribbon | ATK +1, DEF +1 |
+| Tough Glove + Manly Bandanna | ATK +2 |
+| Ballet Shoes + Old Tutu | DEF +3 |
+| Torn Notebook + Cloudy Glasses | ATK +1, DEF +2 |
+| Burnt Pan + Stained Apron | DEF +3 |
+| Empty Gun + Cowboy Hat | ATK +2, DEF +1 |
+| Worn Dagger + Heart Locket | ATK +2, DEF +2 |
+
+Deliberately small numbers — they're a reward for themed loadouts, not a
+balance change.
+
 ## Controls
 
 Arrow keys move · Z / ENTER confirm · X cancel · C menu
@@ -26,7 +54,7 @@ Arrow keys move · Z / ENTER confirm · X cancel · C menu
 
 | File | What it is |
 |---|---|
-| `index.html` | Themed loader — downloads all game parts **in parallel** with a live progress screen, then boots the engine |
+| `index.html` | Minimal loader — downloads all game parts **in parallel** with a live SOUL progress screen, then boots the engine |
 | `sw.js` | Service worker — caches the game files so repeat visits boot in ~2 s and keep working offline |
 | `index.js`, `runner.js`, `runner.wasm`, `runner.data` | Stock GameMaker HTML5 runtime |
 | `game.unx.part1-5` | The game data (~100 MB), merged in the browser |
