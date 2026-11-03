@@ -296,9 +296,25 @@
             });
         },
         
+        // Normalize an IDBFS file node before it enters the file system.
+        // The runner's IDBFS only accepts typed-array contents: a bare
+        // ArrayBuffer makes the file load as EMPTY and the runner's next
+        // syncfs then overwrites the record with the empty version.
+        normalizeFileNode: function(data) {
+            if (data && typeof data === 'object' && data.contents instanceof ArrayBuffer) {
+                try { data.contents = new Uint8Array(data.contents); } catch (e) {}
+            }
+            if (data && typeof data === 'object' && data.timestamp && !(data.timestamp instanceof Date)) {
+                const t = Number(data.timestamp);
+                if (!isNaN(t)) { try { data.timestamp = new Date(t); } catch (e) {} }
+            }
+            return data;
+        },
+
         saveToIndexedDB: function(key, data) {
             return new Promise(async (resolve, reject) => {
                 try {
+                    data = this.normalizeFileNode(data);
                     const db = await this.openDB();
                     const transaction = db.transaction([CONFIG.db.storeName], 'readwrite');
                     const store = transaction.objectStore(CONFIG.db.storeName);
@@ -310,6 +326,31 @@
                     reject(error);
                 }
             });
+        },
+        
+        // Read a single record (or undefined) - used by the import freshness check
+        getFromIndexedDB: function(key) {
+            return new Promise(async (resolve, reject) => {
+                try {
+                    const db = await this.openDB();
+                    const transaction = db.transaction([CONFIG.db.storeName], 'readonly');
+                    const store = transaction.objectStore(CONFIG.db.storeName);
+                    const request = store.get(key);
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => resolve(request.result);
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        },
+        
+        // Extract the mtime of a file node (or 0 if not a node)
+        nodeTimestamp: function(value) {
+            if (value && typeof value === 'object' && value.timestamp) {
+                const t = value.timestamp;
+                return (t instanceof Date) ? t.getTime() : Number(t) || 0;
+            }
+            return 0;
         },
         
         // Export IndexedDB → localStorage
@@ -365,7 +406,7 @@
         },
         
         // Import localStorage → IndexedDB
-        importFromLocalStorage: function() {
+        importFromLocalStorage: function(force) {
             return new Promise(async (resolve, reject) => {
                 try {
                     let importCount = 0;
@@ -378,13 +419,31 @@
                         // Skip companion timestamp meta keys we create (suffix '::ts')
                         if (localKey.endsWith('::ts')) continue;
 
-                        if (localKey && localKey.startsWith(CONFIG.localStoragePrefix) && localKey.indexOf('::') === -1) { /* "::"-keys are records, not save files */
+                        if (localKey && localKey.startsWith(CONFIG.localStoragePrefix) && localKey.indexOf('::') === -1) {
+                            /* "::"-keys are backup/menu records, never game files */
                             const indexedDBKey = localKey.substring(CONFIG.localStoragePrefix.length);
                             const dataString = localStorage.getItem(localKey);
                             try {
                                 const data = deserializeFromLocalStorage(dataString);
                                 promises.push(
-                                    this.saveToIndexedDB(indexedDBKey, data).then(async () => {
+                                    this.getFromIndexedDB(indexedDBKey).then(async (existing) => {
+                                        /* FRESHNESS GUARD - only import a mirror when it is
+                                           strictly NEWER than the file already stored in the
+                                           GameMaker file system. Without this, a mirror that
+                                           lagged behind (the player saved and closed inside
+                                           the 10 s export window) would overwrite the fresh
+                                           save on every boot - saves seemed to not persist. */
+                                        const mirrorTs = this.nodeTimestamp(data);
+                                        const idbTs = this.nodeTimestamp(existing);
+                                        if (!force && existing !== undefined && idbTs > 0 && idbTs >= mirrorTs) {
+                                            if (idbTs > mirrorTs) {
+                                                log('Skip stale mirror for', indexedDBKey,
+                                                    '(file system ' + new Date(idbTs).toLocaleTimeString() +
+                                                    ' > mirror ' + new Date(mirrorTs).toLocaleTimeString() + ')');
+                                            }
+                                            return;
+                                        }
+                                        await this.saveToIndexedDB(indexedDBKey, data);
                                         importCount++;
                                         log('✓ Restored to IndexedDB:', indexedDBKey);
 
@@ -620,8 +679,8 @@
                         localStorage.setItem(key, event.data.allLocalStorageData[key]);
                     });
                     
-                    // Sync to IndexedDB
-                    IndexedDBSync.importFromLocalStorage().then(() => {
+                    // Sync to IndexedDB (force: this is an explicit user restore)
+                    IndexedDBSync.importFromLocalStorage(true).then(() => {
                         log('✓ WigdosXP → localStorage → IndexedDB complete');
                         
                         // Send success response

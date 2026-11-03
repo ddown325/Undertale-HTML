@@ -1,3 +1,147 @@
+/* [ut-gamestorage:start] =======================================================
+
+   oprt.gameStorage POLYFILL  -  makes saves work on a plain web page
+   ---------------------------------------------------------
+   This runner is the Opera GX Games build. Its whole save system is
+   built on window.oprt:
+
+     - the file system mount   window.oprt && window.oprt.gameStorage ?
+                                 GXMFS : IDBFS          (runner.js)
+     - the game's save file    buffer_save_async/buffer_load_async,
+                               which the GML savedata layer uses to
+                               write undertale.sav (the JSON ds_map
+                               holding file0 / undertale.ini / ...)
+
+   On a normal web host (GitHub Pages, itch, localhost) window.oprt does
+   not exist, so both paths silently fail: the game can neither load
+   nor persist ANY save - saves "don't save". This polyfill implements
+   the gameStorage API over the very same IndexedDB layout the runner's
+   IDBFS uses ("/_savedata" database, FILE_DATA store, nodes shaped
+   { timestamp, mode, contents }), so:
+
+     - the mount works exactly as before (GXMFS -> here -> IndexedDB)
+     - buffer_load_async finds undertale.sav  -> CONTINUE works
+     - buffer_save_async persists undertale.sav -> saves survive reload
+     - the save-sync mirror keeps seeing the same records as always
+
+   Keys are normalized: relative names ("undertale.sav") are stored
+   under "/_savedata/<name>", absolute keys ("/_savedata/...") pass
+   through - so every layer converges on the same records.
+
+   ========================================================= [ut-gamestorage:end] */
+(function () {
+  "use strict";
+  if (window.oprt && window.oprt.gameStorage) return;   /* real platform - stay out */
+  window.oprt = window.oprt || {};
+
+  function openDB() {
+    return new Promise(function (resolve, reject) {
+      var req;
+      try { req = indexedDB.open("/_savedata", 21); }
+      catch (e) { reject(e); return; }
+      req.onupgradeneeded = function (e) {
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains("FILE_DATA")) db.createObjectStore("FILE_DATA");
+      };
+      req.onsuccess = function (e) { resolve(e.target.result); };
+      req.onerror = function () { reject(req.error); };
+      req.onblocked = function () { reject(new Error("db blocked")); };
+    });
+  }
+
+  function tx(mode, fn) {
+    return openDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        try {
+          var t = db.transaction(["FILE_DATA"], mode);
+          var st = t.objectStore("FILE_DATA");
+          var out = fn(st);
+          t.oncomplete = function () { resolve(out && out.__req ? out.__req.result : out); db.close(); };
+          t.onerror = function () { reject(t.error); db.close(); };
+          t.onabort = function () { reject(t.error || new Error("abort")); db.close(); };
+        } catch (e) { reject(e); }
+      });
+    });
+  }
+
+  function norm(key) {
+    key = String(key);
+    return key.charAt(0) === "/" ? key : "/_savedata/" + key;
+  }
+
+  function toNode(value) {
+    if (value && typeof value === "object" && "contents" in value) return value;
+    return { timestamp: new Date(), mode: 33206, contents: value };
+  }
+
+  window.oprt.gameStorage = {
+    open: function (name) {
+      if (!window.__gsTrace) window.__gsTrace = [];
+      if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);  /* keep it bounded */
+      window.__gsTrace.push("open:" + name);
+      /* handle contract used by the runner's GXMFS + the WASM save layer:
+           list()             -> Promise<{ key: {timestamp: Date, mode} }>
+           get(key)           -> Promise<node>
+           put(node, key)     -> Promise
+           delete(key)        -> Promise                                       */
+      function listAll() {
+        return new Promise(function (resolve) {
+          openDB().then(function (db) {
+            try {
+              var t = db.transaction(["FILE_DATA"], "readonly");
+              var st = t.objectStore("FILE_DATA");
+              var entries = {};
+              var cur = st.openCursor();
+              cur.onsuccess = function (e) {
+                var c = e.target.result;
+                if (!c) { resolve(entries); db.close(); return; }
+                var n = c.value;
+                entries[c.key] = {
+                  timestamp: (n && n.timestamp instanceof Date) ? n.timestamp :
+                              (n && n.timestamp ? new Date(n.timestamp) : new Date(0)),
+                  mode: n ? n.mode : 33206
+                };
+                c.continue();
+              };
+              cur.onerror = function () { resolve({}); db.close(); };
+            } catch (e) { resolve({}); db.close(); }
+          }, function () { resolve({}); });
+        });
+      }
+      return {
+        list: function () {
+          if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+          window.__gsTrace.push("list:" + name); return listAll();
+        },
+        get: function (key) {
+          if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+          window.__gsTrace.push("get:" + name + "/" + key);
+          return tx("readonly", function (st) {
+            var r = st.get(norm(key));
+            return { __req: r };
+          });
+        },
+        put: function (node, key) {
+          var n = toNode(node);
+          if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+          window.__gsTrace.push("put:" + name + "/" + key + " len=" +
+            (n && n.contents ? (n.contents.byteLength !== undefined ? n.contents.byteLength : n.contents.length) : "?"));
+          return tx("readwrite", function (st) {
+            st.put(n, norm(key));
+          });
+        },
+        "delete": function (key) {
+          if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+          window.__gsTrace.push("del:" + name + "/" + key);
+          return tx("readwrite", function (st) {
+            st.delete(norm(key));
+          });
+        }
+      };
+    }
+  };
+})();
+
 const CHANGE_ASPECT_RATIO = true;
 var bodyElement = document.getElementsByTagName("body")[0];
 var statusElement = document.getElementById("status");
@@ -59,6 +203,8 @@ var Module = {
       console.log(text);
       if (text === "Entering main loop.") {
         // It seems that this text ensures game is loaded.
+        window.UT_BOOTED = true;                     /* boot survived - crash   */
+        try { sessionStorage.removeItem("utBootRetry"); } catch (e) {}  /* retry restored */
         ensureAspectRatio();
       }
       if (element) {
@@ -121,6 +267,11 @@ var Module = {
   },
 };
 Module.setStatus("Downloading...");
+var UT_BOOT_RETRIES = 1;   /* boot crashes (WebGL context race) are flaky -
+                              a plain reload boots fine, so do it hands-free */
+try { UT_BOOT_RETRIES = 1 - Number(sessionStorage.getItem("utBootRetry") || "0"); }
+catch (e) { UT_BOOT_RETRIES = 1; }
+window.UT_BOOTED = false;
 window.onerror = function (event) {
   // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
   Module.setStatus("Exception thrown, see JavaScript console");
@@ -128,6 +279,13 @@ window.onerror = function (event) {
   Module.setStatus = function (text) {
     if (text) Module.printErr("[post-exception status] " + text);
   };
+  /* hands-free retry: a boot that died before the main loop gets ONE
+     automatic reload (the same trick as closing and re-opening the tab) */
+  if (!window.UT_BOOTED && UT_BOOT_RETRIES > 0) {
+    try { sessionStorage.setItem("utBootRetry", "1"); } catch (e) {}
+    Module.printErr("[ut] boot failed before the main loop - reloading once");
+    setTimeout(function () { window.location.reload(); }, 1200);
+  }
 };
 
 // Route URL GET parameters to argc+argv
@@ -137,6 +295,37 @@ if (typeof window === "object") {
   if (!Module['arguments'][0]) {
     Module['arguments'] = [];
   }
+
+  /* [ut-ctxguard] If the browser kills the WebGL context (GPU reset, tab
+     throttle, too many contexts), the runner's render loop dereferences a
+     dead context and throws every frame ("reading 'depthRange'"). The
+     runner has no restore path - reload the page once, hands-free, so the
+     player lands back on the title with CONTINUE instead of a frozen
+     error screen. */
+  (function () {
+    var c = document.getElementById("canvas");
+    if (!c) return;
+    var done = false;
+    c.addEventListener("webglcontextlost", function (e) {
+      if (done) return;
+      done = true;
+      try { e.preventDefault(); } catch (er) {}
+      try {
+        var once = sessionStorage.getItem("utCtxRetry") === "1";
+        if (once) return;                 /* already retried - give up quietly */
+        sessionStorage.setItem("utCtxRetry", "1");
+      } catch (er) {}
+      if (typeof Module.printErr === "function")
+        Module.printErr("[ut] WebGL context lost - reloading to recover");
+      setTimeout(function () { window.location.reload(); }, 900);
+    }, false);
+    /* the retry ticket is only valid until the game runs again */
+    var clear = setInterval(function () {
+      if (!window.UT_BOOTED) return;
+      try { sessionStorage.removeItem("utCtxRetry"); } catch (e) {}
+      clearInterval(clear);
+    }, 1000);
+  })();
 }
 
 function toggleConsole() {
@@ -1430,6 +1619,9 @@ function notify_config_change() {
     catch (e) { return null; }
   }
 
+  /* deletion order: the OLDEST AUTO slots first (the newest MAX_AUTO_KEPT
+     autos stay protected when possible - they are the recent safety net),
+     then the oldest manual states */
   function prune() {
     var ids = backupIds();
     if (ids.length <= MAX_BACKUPS) return;
@@ -1438,14 +1630,22 @@ function notify_config_change() {
       var r = readRecord(ids[i]);
       recs.push({ id: ids[i], t: r ? r.t : ids[i], auto: r ? !!r.auto : false });
     }
-    /* deletion order: the oldest AUTO states first, then the oldest states */
     recs.sort(function (a, b) {
-      if (a.auto !== b.auto) return a.auto ? -1 : 1;   /* autos deleted first */
-      return a.t - b.t;                                 /* oldest first       */
+      if (a.auto !== b.auto) return a.auto ? -1 : 1;   /* autos first  */
+      return a.t - b.t;                                 /* oldest first */
     });
     var excess = ids.length - MAX_BACKUPS;
-    for (var d = 0; d < excess && d < recs.length; d++) {
-      localStorage.removeItem(BACKUP_PREFIX + recs[d].id);
+    var autoTotal = 0;
+    for (var j = 0; j < recs.length; j++) if (recs[j].auto) autoTotal++;
+    var removed = 0, seenAuto = 0;
+    for (var d = 0; d < recs.length && removed < excess; d++) {
+      var r2 = recs[d];
+      if (r2.auto) {
+        seenAuto++;
+        if (autoTotal - seenAuto < MAX_AUTO_KEPT) continue;  /* newest autos stay */
+      }
+      localStorage.removeItem(BACKUP_PREFIX + r2.id);
+      removed++;
     }
   }
 
@@ -1474,7 +1674,7 @@ function notify_config_change() {
   }
 
   /* ---------- IndexedDB (GameMaker file system) writes ---------- */
-  function idbPutNode(key, text) {
+  function idbPutNode(key, text, tsMs) {
     return new Promise(function (resolve) {
       var bytes;
       try { bytes = new TextEncoder().encode(text); }
@@ -1484,7 +1684,11 @@ function notify_config_change() {
         for (var i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
         bytes = arr;
       }
-      var node = { timestamp: new Date(), mode: 33206, contents: bytes.buffer };
+      /* IMPORTANT: contents must be a Uint8Array, NOT a bare ArrayBuffer.
+         The runner's IDBFS load path accepts only typed arrays - a bare
+         ArrayBuffer makes the file load as EMPTY and the next syncfs
+         clobbers it (the runner stores Uint8Array, see its own nodes). */
+      var node = { timestamp: tsMs ? new Date(tsMs) : new Date(), mode: 33206, contents: bytes };
       var req;
       try { req = indexedDB.open("/_savedata"); }
       catch (e) { resolve(false); return; }
@@ -1508,21 +1712,35 @@ function notify_config_change() {
     return /^[\w.\-]+$/.test(name) ? "/_savedata/" + name : null;
   }
 
+  /* pull the embedded "DATE:<ms>" out of a serialized mirror value, so the
+     IDB copy of a restored file carries the same clock as its mirror */
+  function mirrorTimestamp(raw) {
+    try {
+      var m = /"timestamp":"DATE:(\d+)"/.exec(String(raw));
+      if (m) return Number(m[1]);
+    } catch (e) {}
+    return Date.now();
+  }
+
   function restoreBackup(id) {
     var raw = readRecord(id);
-    if (!raw || !raw.data) return { ok: false, n: 0 };
+    if (!raw || !raw.data) return { ok: false, n: 0, done: Promise.resolve(false) };
     var n = 0, idbJobs = [];
     for (var k in raw.data) {
       if (!Object.prototype.hasOwnProperty.call(raw.data, k)) continue;
-      localStorage.setItem(k, raw.data[k]);
+      var val = raw.data[k];
+      localStorage.setItem(k, val);
       n++;
       var idbKey = mirrorToIdbKey(k);
       if (idbKey && window.UTSaveInfo) {
-        var txt = window.UTSaveInfo.decodeMirror(raw.data[k]);
-        if (typeof txt === "string") idbJobs.push(idbPutNode(idbKey, txt));
+        var txt = window.UTSaveInfo.decodeMirror(val);
+        if (typeof txt === "string") {
+          idbJobs.push(idbPutNode(idbKey, txt, mirrorTimestamp(val)));
+          try { localStorage.setItem(k + "::ts", String(mirrorTimestamp(val))); } catch (e2) {}
+        }
       }
     }
-    return { ok: true, n: n, idb: idbJobs.length ? Promise.all(idbJobs) : Promise.resolve([]) };
+    return { ok: true, n: n, done: Promise.all(idbJobs).then(function () { return true; }) };
   }
 
   function deleteBackup(id) {
@@ -1769,8 +1987,10 @@ function notify_config_change() {
   function restoreAndReport(id) {
     var res = restoreBackup(id);
     if (res.ok) {
-      console.log("[UndertaleBackups] restored " + res.n + " keys from " + new Date(id).toLocaleString() +
-                  " - reload the page to pick them up.");
+      res.done.then(function () {
+        console.log("[UndertaleBackups] restored " + res.n + " keys from " + new Date(id).toLocaleString() +
+                    " - reload the page to pick them up.");
+      });
     }
     return res;
   }
@@ -1784,6 +2004,7 @@ function notify_config_change() {
     toggleFullscreen: toggleFullscreen
   };
 })();
+/* [ut-backup v1.2 duplicate removed] */
 /* [ut-saveinfo:start] ==========================================================
 
    SAVE INFO  --  reads the live save mirror and derives the route state
@@ -1808,22 +2029,76 @@ function notify_config_change() {
   var ROOMS="room_xbox_engagement|room_start|room_introstory|room_introimage|room_intromenu|room_area1|room_area1_2|room_ruins1|room_ruins2|room_ruins3|room_ruins4|room_ruins5|room_ruins6|room_ruins7|room_ruins7A|room_ruins8|room_ruins9|room_ruins10|room_ruins11|room_ruins12A|room_ruins12|room_ruins12B|room_ruins13|room_ruins14|room_ruins15A|room_ruins15B|room_ruins15C|room_ruins15D|room_ruins15E|room_ruins16|room_ruins17|room_ruins18OLD|room_ruins19|room_torhouse1|room_torhouse2|room_torhouse3|room_torielroom|room_asrielroom|room_kitchen|room_basement1|room_basement2|room_basement3|room_basement4|room_basement5|room_ruinsexit|room_tundra1|room_tundra2|room_tundra3|room_tundra3A|room_tundra4|room_tundra5|room_tundra6|room_tundra6A|room_tundra7|room_tundra8|room_tundra8A|room_tundra9|room_tundra_spaghetti|room_tundra_snowpuzz|room_tundra_xoxosmall|room_tundra_xoxopuzz|room_tundra_randoblock|room_tundra_lesserdog|room_tundra_icehole|room_tundra_iceentrance|room_tundra_iceexit_new|room_tundra_iceexit|room_tundra_poffzone|room_tundra_dangerbridge|room_tundra_town|room_tundra_town2|room_tundra_dock|room_tundra_inn|room_tundra_inn_2f|room_tundra_grillby|room_tundra_library|room_tundra_garage|room_tundra_sanshouse|room_tundra_paproom|room_tundra_sansroom_dark|room_tundra_sansroom|room_tundra_sansbasement|room_fogroom|room_water1|room_water2|room_water3|room_water3A|room_water4|room_water_bridgepuzz1|room_water5|room_water5A|room_water6|room_water7|room_water8|room_water9|room_water_savepoint1|room_water11|room_water_nicecream|room_water12|room_water_shoe|room_water_bird|room_water_onionsan|room_water14|room_water_piano|room_water_dogroom|room_water_statue|room_water_prewaterfall|room_water_waterfall|room_water_waterfall2|room_water_waterfall3|room_water_waterfall4|room_water_preundyne|room_water_undynebridge|room_water_undynebridgeend|room_water_trashzone1|room_water_trashsavepoint|room_water_trashzone2|room_water_friendlyhub|room_water_undyneyard|room_water_undynehouse|room_water_blookyard|room_water_blookhouse|room_water_hapstablook|room_water_farm|room_water_prebird|room_water_shop|room_water_dock|room_water15|room_water16|room_water_temvillage|room_water17|room_water18|room_water19|room_water20|room_water21|room_water_undynefinal|room_water_undynefinal2|room_water_undynefinal3|room_fire1|room_fire2|room_fire_prelab|room_fire_dock|room_fire_lab1|room_fire_lab2|room_fire3|room_fire5|room_fire6|room_fire6A|room_fire_lasers1|room_fire7|room_fire8|room_fire_shootguy_2|room_fire9|room_fire_shootguy_1|room_fire_turn|room_fire_cookingshow|room_fire_savepoint1|room_fire_elevator_r1|room_fire_elevator_r2|room_fire_hotdog|room_fire_walkandbranch|room_fire_sorry|room_fire_apron|room_fire10|room_fire_rpuzzle|room_fire_mewmew2|room_fire_boysnightout|room_fire_newsreport|room_fire_coreview2|room_fire_elevator_l2|room_fire_elevator_l3|room_fire_spidershop|room_fire_walkandbranch2|room_fire_conveyorlaser|room_fire_shootguy_3|room_fire_preshootguy4|room_fire_shootguy_4|room_fire_savepoint2|room_fire_spider|room_fire_pacing|room_fire_operatest|room_fire_multitile|room_fire_hotelfront_1|room_fire_hotelfront_2|room_fire_hotellobby|room_fire_restaurant|room_fire_hoteldoors|room_fire_hotelbed|room_fire_elevator_r3|room_fire_precore|room_fire_core1|room_fire_core2|room_fire_core3|room_fire_core4|room_fire_core5|room_fire_core_freebattle|room_fire_core_laserfun|room_fire_core_branch|room_fire_core_bottomleft|room_fire_core_left|room_fire_core_topleft|room_fire_core_top|room_fire_core_topright|room_fire_core_right|room_fire_core_bottomright|room_fire_core_center|room_fire_shootguy_5|room_fire_core_treasureleft|room_fire_core_treasureright|room_fire_core_warrior|room_fire_core_bridge|room_fire_core_premett|room_fire_core_metttest|room_fire_core_final|room_fire_elevator|room_fire_elevator_l1|room_fire_finalelevator|room_castle_elevatorout|room_castle_precastle|room_castle_hook|room_castle_front|room_asghouse1|room_asghouse2|room_asghouse3|room_asgoreroom|room_asrielroom_final|room_kitchen_final|room_basement1_final|room_basement2_final|room_basement3_final|room_basement4_final|room_lastruins_corridor|room_sanscorridor|room_castle_finalshoehorn|room_castle_coffins1|room_castle_coffins2|room_castle_throneroom|room_castle_prebarrier|room_castle_barrier|room_castle_exit|room_undertale_end|room_castle_trueexit|room_outsideworld|room_fire_labelevator|room_truelab_elevatorinside|room_truelab_elevator|room_truelab_hall1|room_truelab_hub|room_truelab_hall2|room_truelab_operatingroom|room_truelab_redlever|room_truelab_prebed|room_truelab_bedroom|room_truelab_mirror|room_truelab_bluelever|room_truelab_hall3|room_truelab_shower|room_truelab_determination|room_truelab_tv|room_truelab_cooler|room_truelab_greenlever|room_truelab_fan|room_truelab_castle_elevator|room_truelab_prepower|room_truelab_power|room_gaster|room_icecave1|room_ice_dog|room2|room_water_fakehallway|room_mysteryman|room_soundtest|TESTROOM|room_water_redacted|room_water13|room_overworld|room_overworld3|bullettest|room_water16A|room_end_castroll|room_end_highway|room_end_beach|room_end_metta|room_end_school|room_end_mtebott|room_creditsdodger|room_end_myroom|room_end_theend|room_spritecheck|room_settings|room_controltest|room_f_start|room_f_intro|room_f_menu|room_f_room|room_floweyx|room_f_phrase|room_fire4|room_fire10_old|room_fire10A_old|room_tundra_placeholder|room_ruins12B_old|room_tundra_rollsnow|room_water7_older|room_meetundyne_old|room_water_mushroom|room_monsteralign_test|room_battle|room_floweybattle|room_fastbattle|room_storybattle|room_gameover|room_shop1|room_shop2|room_shop3|room_shop4|room_shop5|room_riverman_transition|room_papdate|room_adate|room_flowey_endchoice|room_flowey_regret|room_empty|room_emptywhite|room_emptyblack|room_nothingness|room_undertale|room_of_dog|room_quizholder|room_friendtest|room_bringitinguys|room_asrielappears|room_goodbyeasriel|room_asrielmemory|room_asrieltest|room_afinaltest|room_dogshrine|room_dogshrine_ruined|room_dogshrine_mewmew|room_of_bog|room_dogshrine_xbox|room_decomp_settings".split("|");
 
   /* mirror helpers ------------------------------------------------------- */
-  function decodeMirror(raw) {
-    if (!raw) return null;
-    if (raw.indexOf("JS:") === 0) {
-      try { return JSON.parse(raw.slice(3)); } catch (e) { return null; }
+  /* mirror values are produced by the save-sync's serializer, so a file
+     shows up in one of these shapes:
+       "JS:<json>"                    primitive (string/number)
+       "AB:<base64>"                  raw ArrayBuffer
+       "TA:<ctor>:<base64>"           typed array
+       "DATE:<ms>"                    Date
+       "OBJ:{"contents":"AB:..",     an IDBFS file node - the usual case
+             "mode":"JS:33206",
+             "timestamp":"DATE:.."}
+     decodeMirror turns any of these into the file's TEXT (or null). */
+  function b64ToText(b64) {
+    try {
+      var bin = atob(b64), s = "";
+      for (var i = 0; i < bin.length; i++) s += String.fromCharCode(bin.charCodeAt(i) & 0xff);
+      return s;
+    } catch (e) { return null; }
+  }
+
+  function decodeLeaf(str) {
+    if (str === null || str === undefined) return null;
+    str = String(str);
+    if (str.indexOf("JS:") === 0) {
+      try { return JSON.parse(str.slice(3)); } catch (e) { return null; }
     }
-    if (raw.indexOf("AB:") === 0) {
-      try {
-        var b64 = raw.slice(3), bin = atob(b64), s = "";
-        for (var i = 0; i < bin.length; i++) s += String.fromCharCode(bin.charCodeAt(i) & 0xff);
-        return s;
-      } catch (e) { return null; }
+    if (str.indexOf("AB:") === 0) return b64ToText(str.slice(3));
+    if (str.indexOf("TA:") === 0) {
+      var rest = str.slice(3), c = rest.indexOf(":");
+      return c === -1 ? b64ToText(rest) : b64ToText(rest.slice(c + 1));
     }
     return null;
   }
 
+  function decodeMirror(raw) {
+    if (!raw) return null;
+    if (raw.indexOf("OBJ:") === 0) {
+      /* file node: {"contents":<leaf>, "mode":<leaf>, "timestamp":<leaf>} */
+      try {
+        var node = JSON.parse(raw.slice(4));
+        var txt = node && typeof node === "object" ? decodeLeaf(node.contents) : null;
+        if (txt !== null && txt !== undefined) return txt;
+        /* node JSON where contents itself is a nested serialized leaf */
+        for (var k in node) {
+          var v2 = decodeLeaf(node[k]);
+          if (typeof v2 === "string" && v2.length) return v2;
+        }
+      } catch (e) { return null; }
+      return null;
+    }
+    var d = decodeLeaf(raw);
+    return d === undefined ? null : d;
+  }
+
   function findFile(name) {
+    /* The HTML5 port keeps every game file inside ONE buffer file,
+       undertale.sav, whose content is a JSON object:
+           {"file0":"<553 lines>","undertale.ini":"...","file9":"..."}
+       (the game's ossafe_file_text_* wrappers read from the in-memory
+       savedata ds_map, which obj_time fills by json_decoding that file).
+       Read the entry from there first, then fall back to per-file mirrors
+       (used by the runner's own files like decomp_vars.ini). */
+    try {
+      var sav = decodeMirror(localStorage.getItem("ut/_savedata/undertale.sav"));
+      if (typeof sav === "string" && sav.charAt(0) === "{") {
+        var json = sav.charCodeAt(sav.length - 1) === 0 ? sav.slice(0, -1) : sav;
+        var map = JSON.parse(json);
+        var lower = String(name).toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(map, lower) &&
+            typeof map[lower] === "string") return map[lower];
+      }
+    } catch (e) {}
     var v = localStorage.getItem("ut/_savedata/" + name);
     if (v !== null) { var d = decodeMirror(v); if (d !== null) return d; }
     v = localStorage.getItem("ut" + name);
@@ -1857,7 +2132,7 @@ function notify_config_change() {
   function areaOf(rn) {
     if (rn === "room_sanscorridor") return "THE LAST CORRIDOR";
     if (/^room_ruins|^room_f_intro|^room_basement\d*$/.test(rn)) return "RUINS";
-    if (/^room_tundra|^room_fogroom/.test(rn)) return "SNOWDIN";
+    if (/^room_tundra/.test(rn)) return "SNOWDIN";
     if (/^room_water/.test(rn)) return "WATERFALL";
     if (/^room_fire_core/.test(rn)) return "CORE";
     if (/^room_fire/.test(rn)) return "HOTLAND";
@@ -1923,6 +2198,306 @@ function notify_config_change() {
   };
 })();
 
+/* [ut-bossstates:start] ========================================================
+
+   BOSS STATES  -  skip straight to any fight
+   ---------------------------------------------------------
+   These are not backups. A boss state is a hand-crafted save file that
+   drops you at the door of a boss with the stats, equipment, inventory
+   and route flags the fight expects, exactly as the game's own scripts
+   compute them (scr_levelup / scr_weaponeq / scr_armoreq / scr_murderlv):
+
+     stats   maxhp = 16 + 4*lv, at = 8 + 2*lv, df = 9 + ceil(lv/4)
+             (LV20 caps at 99)
+     weapon  AT bonus goes into wstrength, armor DF bonus into adef
+     EXP     the game's own LV thresholds (LV19 = 50000, ...)
+     plot    the value that arms the fight trigger (probed from the
+             trigger objects: Toriel 24, Papyrus 100, Undyne 121,
+             Undyne the Undying 114+, Mettaton 197, Asgore 208, Sans 200)
+     flags   genocide states set exactly the murderlv chain the fight
+             needs - nothing more, so no story flags are lied about
+
+   Selecting one merges the three entries into undertale.sav (the JSON
+   ds_map the game's savedata system uses), writes it to BOTH the
+   localStorage mirror and the GameMaker file system (IndexedDB), waits
+   for the writes to land, then reloads. CONTINUE then starts at the
+   boss. Your previous file is NOT kept - make a backup first (or use
+   Shift+Ctrl+E, which now warns in the menu).
+
+   Console: window.UTBossStates.load('sans')  -  returns a Promise.
+
+   ======================================================== [ut-bossstates:end] */
+(function () {
+  "use strict";
+  if (window.__utBossInit) return;
+  window.__utBossInit = true;
+
+  /* ---------- genocide flag chains (exact scr_murderlv port) ---------- */
+  var GEN_RUINS   = { 202: 20, 45: 4, 52: 1, 53: 1, 54: 1, 57: 2 };
+  var GEN_SNOWDIN = { 203: 16, 67: 1, 81: 1, 252: 1 };
+  var GEN_WATER   = { 204: 18 };
+  var GEN_AFTER_UT   = { 251: 1, 350: 1 };          /* Undyne the Undying dead */
+  var GEN_AFTER_NEO  = { 402: 1, 397: 1 };           /* Mettaton NEO dead       */
+  var GEN_ENDGAME = { 205: 40, 425: 1, 27: 0 };     /* Hotland clear + corridor */
+
+  function genFlags(chain) {
+    var f = {};
+    for (var i = 0; i < chain.length; i++) {
+      var src = chain[i];
+      for (var k in src) f[k] = src[k];
+    }
+    return f;
+  }
+
+  /* ---------- boss table (ids = save slots) ---------- */
+  var BOSSES = [
+    { id: "toriel",   name: "TORIEL",               area: "RUINS EXIT",
+      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 25,
+      room: 42,  plot: 24,
+      weapon: 13, armor: 4,  wstrength: 3,  adef: 0,      /* Toy Knife + Bandage */
+      items: [1, 1, 7, 7, 0, 0, 0, 0],              /* 2x Monster Candy, 2x Spider Donut */
+      time: 900, sub: "RUINS - THE EXIT" },
+    { id: "papyrus",  name: "PAPYRUS",              area: "SNOWDIN FOREST",
+      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 60,
+      room: 82,  plot: 100,
+      weapon: 14, armor: 15, wstrength: 5,  adef: 7,     /* Tough Glove + Bandanna */
+      items: [16, 16, 21, 21, 17, 17, 0, 0],        /* 2x Snowman Piece, Cinnamon Bun, Nice Cream */
+      time: 1800, sub: "SNOWDIN - THE FOG" },
+    { id: "undyne",   name: "UNDYNE",               area: "WATERFALL",
+      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 120,
+      room: 135, plot: 121,
+      weapon: 25, armor: 24, wstrength: 7,  adef: 10,    /* Ballet Shoes + Old Tutu */
+      items: [41, 41, 42, 42, 22, 22, 0, 0],        /* 2x Sea Tea, Starfait, Temmie Flakes */
+      time: 2400, sub: "WATERFALL - THE YARD" },
+    { id: "undyneut", name: "UNDYNE THE UNDYING",   area: "WATERFALL",
+      route: "GENOCIDE", lv: 11, xp: 1700,  kills: 56,  gold: 60,
+      room: 112, plot: 114,
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER]),
+      weapon: 25, armor: 24, wstrength: 7,  adef: 10,
+      items: [16, 16, 41, 41, 43, 43, 0, 0],
+      time: 3000, sub: "WATERFALL - THE BRIDGE" },
+    { id: "mettatonex", name: "METTATON EX",        area: "THE CORE",
+      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 240,
+      room: 212, plot: 197,
+      weapon: 47, armor: 46, wstrength: 10, adef: 11,   /* Burnt Pan + Stained Apron */
+      items: [36, 36, 40, 40, 41, 41, 0, 0],        /* 2x Instant Noodles, Glamburger, Sea Tea */
+      time: 3600, sub: "THE CORE - THE STAGE" },
+    { id: "mettatonneo", name: "METTATON NEO",      area: "THE CORE",
+      route: "GENOCIDE", lv: 13, xp: 3500,  kills: 57,  gold: 100,
+      room: 212, plot: 197,
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT]),
+      weapon: 47, armor: 46, wstrength: 10, adef: 11,
+      items: [43, 43, 36, 36, 61, 61, 0, 0],        /* 2x Legendary Hero, Instant Noodles, Face Steak */
+      time: 3900, sub: "THE CORE - THE STAGE" },
+    { id: "asgore",   name: "ASGORE",               area: "THE BARRIER",
+      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 300,
+      room: 238, plot: 208,
+      weapon: 49, armor: 48, wstrength: 17, adef: 12,   /* Empty Gun + Cowboy Hat (AT+5) */
+      items: [11, 36, 36, 43, 43, 0, 0, 0],         /* Butterscotch Pie, 2x Instant Noodles, Legendary Hero */
+      time: 4200, sub: "NEW HOME - THE BARRIER" },
+    { id: "sans",     name: "SANS",                 area: "THE LAST CORRIDOR",
+      route: "GENOCIDE", lv: 19, xp: 50000, kills: 100, gold: 120,
+      room: 232, plot: 200,
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_ENDGAME]),
+      weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
+      items: [43, 43, 43, 36, 36, 36, 0, 0],        /* 3x Legendary Hero, 3x Instant Noodles */
+      time: 4800, sub: "NEW HOME - THE JUDGMENT HALL" }
+  ];
+
+  /* ---------- stat formulas (ported from scr_levelup) ---------- */
+  function statsFor(lv) {
+    var maxhp = 16 + 4 * lv, at = 8 + 2 * lv, df = 9 + Math.ceil(lv / 4);
+    if (lv >= 20) { maxhp = at = df = 99; }
+    return { maxhp: maxhp, at: at, df: df };
+  }
+
+  /* ---------- file0 builder: the 553-line save ---------- */
+  function buildFile0(b, name) {
+    var st = statsFor(b.lv);
+    var L = [];
+    L[0] = name || "FRISK";
+    L[1] = b.lv;
+    L[2] = st.maxhp;
+    L[3] = 0;              /* maxen */
+    L[4] = st.at;
+    L[5] = b.wstrength;
+    L[6] = st.df;
+    L[7] = b.adef;
+    L[8] = 0;              /* sp */
+    L[9] = b.xp;
+    L[10] = b.gold;
+    L[11] = b.kills;
+    /* 12..29: item[i], phone[i] interleaved (i = 0..8) */
+    for (var i = 0; i <= 8; i++) {
+      L[12 + 2 * i] = (b.items && b.items[i]) || 0;
+      L[13 + 2 * i] = 0;
+    }
+    L[30] = b.weapon;
+    L[31] = b.armor;
+    /* 32..544: flags (0..512) */
+    for (var f = 0; f <= 512; f++) L[32 + f] = 0;
+    if (b.flags) for (var k in b.flags) L[32 + Number(k)] = b.flags[k];
+    L[545] = b.plot;
+    L[546] = 0; L[547] = 0; L[548] = 0; L[549] = 0;   /* menuchoice */
+    L[550] = 0;                                       /* currentsong */
+    L[551] = b.room;
+    L[552] = b.time;
+    var out = "";
+    for (var n = 0; n <= 552; n++) out += (L[n] === undefined ? 0 : L[n]) + "\n";
+    return out;
+  }
+
+  /* ---------- undertale.ini builder (GameMaker ini format) ---------- */
+  function buildIni(b, name, existing) {
+    var st = {};
+    /* keep any sections the game wrote that we do not manage */
+    var section = null;
+    var lines = existing ? existing.replace(/\r/g, "").split("\n") : [];
+    for (var i = 0; i < lines.length; i++) {
+      var m = /^\[(.+)\]\s*$/.exec(lines[i]);
+      if (m) { section = m[1]; continue; }
+      if (!section || section === "General" || section === "Toriel" ||
+          section === "Papyrus" || section === "Undyne") continue;
+      (st[section] = st[section] || []).push(lines[i]);
+    }
+    var out = "";
+    out += "[General]\n";
+    out += "Name=" + (name || "FRISK") + "\n";
+    out += "Love=" + b.lv + "\n";
+    out += "Time=" + b.time + "\n";
+    out += "Kills=" + b.kills + "\n";
+    out += "Room=" + b.room + "\n";
+    out += "\n";
+    out += "[Toriel]\nTK=" + (b.route === "GENOCIDE" ? 1 : 0) + "\nTS=0\n\n";
+    out += "[Papyrus]\nPD=0\n\n";
+    out += "[Undyne]\nUD=0\n\n";
+    for (var s in st) {
+      out += "[" + s + "]\n";
+      out += st[s].join("\n");
+      out += "\n\n";
+    }
+    return out;
+  }
+
+  /* ---------- writers: mirror + GameMaker file system ---------- */
+  function textToB64(text) {
+    try { return btoa(unescape(encodeURIComponent(text))); }
+    catch (e) {
+      var s = "", arr = new TextEncoder().encode(text);
+      for (var i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
+      return btoa(s);
+    }
+  }
+
+  function encodeMirror(text, tsMs) {
+    return 'OBJ:{"contents":"AB:' + textToB64(text) + '","mode":"JS:33206","timestamp":"DATE:' + tsMs + '"}';
+  }
+
+  function idbPut(key, text, tsMs) {
+    return new Promise(function (resolve) {
+      var bytes;
+      try { bytes = new TextEncoder().encode(text); }
+      catch (e) {
+        var s = unescape(encodeURIComponent(text));
+        var arr = new Uint8Array(s.length);
+        for (var i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
+        bytes = arr;
+      }
+      var node = { timestamp: new Date(tsMs), mode: 33206, contents: bytes };
+      var req;
+      try { req = indexedDB.open("/_savedata"); }
+      catch (e) { resolve(false); return; }
+      req.onsuccess = function (e) {
+        try {
+          var db = e.target.result;
+          var tx = db.transaction(["FILE_DATA"], "readwrite");
+          tx.objectStore("FILE_DATA").put(node, key);
+          tx.oncomplete = function () { resolve(true); db.close(); };
+          tx.onerror = function () { resolve(false); db.close(); };
+        } catch (er) { resolve(false); }
+      };
+      req.onerror = function () { resolve(false); };
+    });
+  }
+
+  function writeGameFile(name, text, tsMs) {
+    var mirrorKey = "ut/_savedata/" + name;
+    try {
+      localStorage.setItem(mirrorKey, encodeMirror(text, tsMs));
+      try { localStorage.setItem(mirrorKey + "::ts", String(tsMs)); } catch (e2) {}
+    } catch (e) {}
+    return idbPut("/_savedata/" + name, text, tsMs);
+  }
+
+  /* ---------- the real save file: undertale.sav ----------
+     The HTML5 port does not keep file0/undertale.ini as disk files. Every
+     game file lives inside ONE buffer, undertale.sav, holding a JSON
+     object that the game json_decodes into its savedata ds_map:
+
+       { "file0": "<553 lines>", "file9": "...", "undertale.ini": "..." }
+
+     obj_time loads it with buffer_load_async at boot; scr_save writes it
+     with buffer_save_async. The buffer format is the JSON text plus a
+     trailing NUL (buffer_string). Boss states merge their three entries
+     into any existing map (config.ini and other files are preserved). */
+  function readSavedataMap() {
+    var txt = window.UTSaveInfo ? window.UTSaveInfo.findFile("undertale.sav") : null;
+    if (typeof txt === "string" && txt.charAt(0) === "{") {
+      var json = txt.charCodeAt(txt.length - 1) === 0 ? txt.slice(0, -1) : txt;
+      try {
+        var m = JSON.parse(json);
+        if (m && typeof m === "object") return m;
+      } catch (e) {}
+    }
+    return {};
+  }
+
+  function buildSavedata(entries) {
+    var map = readSavedataMap();
+    for (var k in entries) map[k] = entries[k];
+    return JSON.stringify(map);
+  }
+
+  function player() {
+    if (window.UTSaveInfo) {
+      try {
+        var info = window.UTSaveInfo.parse();
+        if (info && info.name) return info.name;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function load(bossId) {
+    var b = null;
+    for (var i = 0; i < BOSSES.length; i++) if (BOSSES[i].id === bossId) b = BOSSES[i];
+    if (!b) return Promise.reject(new Error("no such boss state: " + bossId));
+    var name = player() || "FRISK";
+    var existingIni = window.UTSaveInfo ? window.UTSaveInfo.findFile("undertale.ini") : null;
+    var file0 = buildFile0(b, name);
+    var ini = buildIni(b, name, typeof existingIni === "string" ? existingIni : null);
+    var savJson = buildSavedata({
+      "file0": file0,
+      "file9": file0,               /* temp-save: CONTINUE after death */
+      "undertale.ini": ini
+    });
+    var ts = Date.now();
+    var jobs = [
+      writeGameFile("undertale.sav", savJson + "\u0000", ts),
+      writeGameFile("file0", file0, ts),       /* kept as real files too, harmless */
+      writeGameFile("undertale.ini", ini, ts)
+    ];
+    return Promise.all(jobs).then(function (ok) {
+      console.log("[UTBossStates] wrote " + b.name + " state (undertale.sav + file0/ini) - reload and CONTINUE");
+      return { boss: b, name: name, wrote: ok };
+    });
+  }
+
+  window.UTBossStates = {
+    list: BOSSES, load: load, buildFile0: buildFile0, buildIni: buildIni
+  };
+})();
+
 /* [ut-pausemenu:start] ==========================================================
 
    PAUSE MENU  -  built into the game, drawn like the game
@@ -1934,7 +2509,13 @@ function notify_config_change() {
    yellow - the same visual language as the in-game menus.
 
      RESUME       back to the game
-     SAVE STATES  the backup manager: every state is tagged with its route
+     BOSS STATES  skip straight to any fight: TORIEL, PAPYRUS, UNDYNE,
+                  UNDYNE THE UNDYING, METTATON EX, METTATON NEO, ASGORE,
+                  SANS. Each state is a crafted save - right stats, gear,
+                  inventory and route flags - written to file0/file9 and
+                  the undertale.ini, then the game reloads. CONTINUE then
+                  starts a few steps from the fight.
+     MY BACKUPS   snapshots of your own file, tagged with route
                   (PACIFIST / NEUTRAL / GENOCIDE) and boss checkpoint
                   (SANS, UNDYNE THE UNDYING, ASGORE, ...). Filter by route,
                   make states, restore, delete, toggle AUTO-BACKUP.
@@ -1959,8 +2540,9 @@ function notify_config_change() {
   var canvas = null, ctx = null, raf = -1;
 
   var S = {
-    open: false, mode: "main",       /* main | states | confirm */
+    open: false, mode: "main",       /* main | boss | states | confirm */
     sel: 0, tab: 0, scroll: 0,
+    bossSel: 0, bossScroll: 0,
     confirm: null,                   /* {kind, id, yes} */
     slots: [], info: null, tick: 0
   };
@@ -1983,7 +2565,7 @@ function notify_config_change() {
       "background:transparent;cursor:default;";
     document.body.appendChild(canvas);
     ctx = canvas.getContext("2d");
-    if (ctx) ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = false;
     return true;
   }
   function placeCanvas() {
@@ -2093,19 +2675,66 @@ function notify_config_change() {
     }
 
     box(32, 84, 576, 262);
-    text("PAUSED", 320 - textW("PAUSED", 3) / 2, 108, 3, COL.txt);
+    text("PAUSED", 320 - textW("PAUSED", 3) / 2, 104, 3, COL.txt);
 
-    var items = ["RESUME", "SAVE STATES", "FULLSCREEN", "QUIT"];
-    var y = 158;
+    var items = ["RESUME", "BOSS STATES", "MY BACKUPS", "FULLSCREEN", "QUIT"];
+    var y = 138;
     for (var i = 0; i < items.length; i++) {
-      y = menuRow(84, y, items[i], S.sel === i) + 8;
+      y = menuRow(84, y, items[i], S.sel === i) + 6;
     }
     text("\u2191\u2193 SELECT   Z CONFIRM   X RESUME", 320 - textW("\u2191\u2193 SELECT   Z CONFIRM   X RESUME", 1) / 2, 368, 1, COL.hint);
   }
 
+  /* ---------- BOSS STATES screen: skip straight to a fight ---------- */
+  function bossList() {
+    return window.UTBossStates ? window.UTBossStates.list : [];
+  }
+
+  function drawBoss() {
+    text("BOSS STATES", 36, 20, 2, COL.txt);
+    var bl = bossList();
+    var hint0 = "SKIP STRAIGHT TO A FIGHT - REPLACES YOUR FILE";
+    text(hint0, W - 36 - textW(hint0, 1), 20, 1, COL.hint);
+
+    box(32, 60, 576, 344);
+
+    var visible = Math.min(bl.length, 7);
+    if (S.bossScroll > bl.length - visible) S.bossScroll = Math.max(0, bl.length - visible);
+    var y = 84;
+    for (var r = 0; r < visible; r++) {
+      var idx = S.bossScroll + r;
+      var b = bl[idx];
+      if (!b) break;
+      var sel = S.bossSel === idx;
+      if (sel) heart(58, y + 3, 2, COL.red);
+      var rc = routeColor(b.route);
+      text(b.route.slice(0, 3), 84, y, 2, rc);
+      text(b.name, 84 + textW("GEN", 2) + 14, y, 2, sel ? COL.sel : COL.txt);
+      var lvTxt = "LV" + b.lv;
+      text(lvTxt, 420, y, 2, sel ? COL.sel : COL.txt);
+      rows.push({ x: 52, y: y - 4, w: 460, h: 22, act: "boss" + idx, sel: sel });
+      y += 26;
+    }
+    /* selected boss detail line */
+    var cur = bl[S.bossSel];
+    if (cur) {
+      var d = cur.sub + "   " + (cur.route === "GENOCIDE" ? "GENOCIDE ROUTE" : cur.route === "PACIFIST" ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
+      text(d.slice(0, 66), 58, 360, 1, COL.hint);
+    }
+    if (bl.length > 7) {
+      var sc = "MORE " + (bl.length - (S.bossScroll + visible));
+      if (bl.length - (S.bossScroll + visible) > 0) text(sc, 320 - textW(sc, 1) / 2, 360, 1, COL.hint);
+    }
+    var hint = "\u2191\u2193 SELECT   Z SKIP TO BOSS   X BACK";
+    text(hint, 320 - textW(hint, 1) / 2, 414, 1, COL.hint);
+    text("TIP - SHIFT CTRL E BACKS UP YOUR FILE FIRST", 320 - textW("TIP - SHIFT CTRL E BACKS UP YOUR FILE FIRST", 1) / 2, 428, 1, COL.hint);
+  }
+
   function drawStates() {
     var info = S.info;
-    text("SAVE STATES", 36, 20, 2, COL.txt);
+    text("MY BACKUPS", 36, 20, 2, COL.txt);
+    var bt = "SNAPSHOTS OF YOUR OWN FILE";
+    text(bt, W - 36 - textW(bt, 1), 20, 1, COL.hint);
 
     /* route filter tabs */
     var tx = 36;
@@ -2171,6 +2800,15 @@ function notify_config_change() {
       var sub = (m.route || "?") + (m.boss ? " - " + m.boss : "") + "  LV" + (m.lv || 1) +
                 "  " + new Date(c.id).toLocaleString();
       confirmBox(t, sub);
+    } else if (c.kind === "boss") {
+      var b = c.boss || {};
+      var t2 = "SKIP TO " + (b.name || "THIS BOSS") + "?";
+      var sub2 = "LV " + (b.lv || 1) + " - " + (b.sub || b.area || "") +
+                 (b.route === "GENOCIDE" ? " - GENOCIDE" : "");
+      confirmBox(t2, sub2);
+      text("YOUR CURRENT FILE WILL BE REPLACED", 320 - textW("YOUR CURRENT FILE WILL BE REPLACED", 1) / 2, 232, 1, COL.hint);
+    } else if (c.kind === "quit") {
+      confirmBox("QUIT THE GAME?", "BACK TO THE LOADING SCREEN");
     } else {
       confirmBox("DELETE THIS SAVE STATE?", new Date(c.id).toLocaleString());
     }
@@ -2187,6 +2825,7 @@ function notify_config_change() {
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(0, 0, W, H);
     if (S.mode === "main") drawMain();
+    else if (S.mode === "boss") drawBoss();
     else if (S.mode === "states") drawStates();
     else drawConfirm();
   }
@@ -2207,11 +2846,14 @@ function notify_config_change() {
     var res = window.UndertaleBackups.restore(S.confirm.id);
     if (res && res.ok) {
       close();
-      /* reload only after the IndexedDB writes settle - reloading sooner
-         kills the transactions and the save-sync then drops the mirror */
-      var go = function () { setTimeout(function () { window.location.reload(); }, 60); };
-      if (res.idb && typeof res.idb.then === "function") res.idb.then(go, go);
-      else go();
+      /* wait for the IndexedDB writes to land BEFORE reloading - the old
+         60 ms timer could beat the IDB transaction and lose the restore */
+      var done = res.done || Promise.resolve(true);
+      done.then(function () {
+        setTimeout(function () { window.location.reload(); }, 150);
+      }, function () {
+        setTimeout(function () { window.location.reload(); }, 150);
+      });
     }
   }
   function doDelete() {
@@ -2220,26 +2862,64 @@ function notify_config_change() {
     S.mode = "states";
     refresh();
   }
+  function doBossGo() {
+    var b = S.confirm.boss;
+    if (!b || !window.UTBossStates) { S.confirm = null; S.mode = "boss"; return; }
+    close();
+    window.UTBossStates.load(b.id).then(function () {
+      setTimeout(function () { window.location.reload(); }, 150);
+    }, function () {
+      setTimeout(function () { window.location.reload(); }, 150);
+    });
+  }
+  function bossUp() {
+    var bl = bossList();
+    if (!bl.length) return;
+    S.bossSel = (S.bossSel + bl.length - 1) % bl.length;
+    if (S.bossSel < S.bossScroll) S.bossScroll = S.bossSel;
+  }
+  function bossDown() {
+    var bl = bossList();
+    if (!bl.length) return;
+    S.bossSel = (S.bossSel + 1) % bl.length;
+    if (S.bossSel > S.bossScroll + 6) S.bossScroll = S.bossSel - 6;
+  }
+  function bossGo() {
+    var bl = bossList();
+    var b = bl[S.bossSel];
+    if (!b) return;
+    S.confirm = { kind: "boss", boss: b, id: 0, yes: true };
+    S.mode = "confirm";
+  }
 
   function confirmSel(i) {
     S.confirm.yes = i === 0;
   }
+  function confirmBack() {
+    var kind = S.confirm && S.confirm.kind;
+    S.confirm = null;
+    if (kind === "quit") S.mode = "main";
+    else if (kind === "boss") S.mode = "boss";
+    else S.mode = "states";
+  }
   function confirmGo() {
     if (S.confirm.yes) {
       if (S.confirm.kind === "restore") doRestore();
+      else if (S.confirm.kind === "boss") doBossGo();
+      else if (S.confirm.kind === "quit") { S.confirm = null; close(); if (typeof quitIfSupported === "function") quitIfSupported(); }
       else doDelete();
     } else {
-      S.confirm = null;
-      S.mode = "states";
+      confirmBack();
     }
   }
 
   /* ---------- input ---------- */
   function mainAction(i) {
     if (i === 0) close();
-    else if (i === 1) { S.mode = "states"; S.sel = 0; S.scroll = 0; refresh(); }
-    else if (i === 2) { if (window.UndertaleBackups) window.UndertaleBackups.toggleFullscreen(); }
-    else if (i === 3) {
+    else if (i === 1) { S.mode = "boss"; S.bossSel = 0; S.bossScroll = 0; }
+    else if (i === 2) { S.mode = "states"; S.sel = 0; S.scroll = 0; refresh(); }
+    else if (i === 3) { if (window.UndertaleBackups) window.UndertaleBackups.toggleFullscreen(); }
+    else if (i === 4) {
       S.confirm = { kind: "quit", id: 0, yes: false };
       S.mode = "confirm";
     }
@@ -2287,10 +2967,16 @@ function notify_config_change() {
     var k = e.key;
     var handled = true;
     if (S.mode === "main") {
-      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 3) % 4;
-      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 4;
+      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 4) % 5;
+      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 5;
       else if (k === "Enter" || k === "z" || k === "Z" || k === " ") mainAction(S.sel);
       else if (k === "Escape" || k === "x" || k === "X") close();
+      else handled = false;
+    } else if (S.mode === "boss") {
+      if (k === "ArrowUp" || k === "w" || k === "W") bossUp();
+      else if (k === "ArrowDown" || k === "s" || k === "S") bossDown();
+      else if (k === "Enter" || k === "z" || k === "Z" || k === " ") bossGo();
+      else if (k === "Escape" || k === "x" || k === "X") { S.mode = "main"; S.sel = 1; }
       else handled = false;
     } else if (S.mode === "states") {
       if (k === "ArrowUp" || k === "w" || k === "W") statesUp();
@@ -2319,10 +3005,7 @@ function notify_config_change() {
       if (k === "ArrowLeft" || k === "a" || k === "A") confirmSel(0);
       else if (k === "ArrowRight" || k === "d" || k === "D") confirmSel(1);
       else if (k === "Enter" || k === "z" || k === "Z" || k === " ") confirmGo();
-      else if (k === "Escape" || k === "x" || k === "X") {
-        if (S.confirm.kind === "quit") { S.confirm = null; S.mode = "main"; }
-        else { S.confirm = null; S.mode = "states"; }
-      }
+      else if (k === "Escape" || k === "x" || k === "X") confirmBack();
       else handled = false;
     }
     if (handled || GAME_KEYS[k]) {
@@ -2347,7 +3030,9 @@ function notify_config_change() {
         var w = rows[i];
         if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) {
           if (S.mode === "main") S.sel = i;
-          else if (S.mode === "states") {
+          else if (S.mode === "boss") {
+            if (w.act.indexOf("boss") === 0) S.bossSel = Number(w.act.slice(4));
+          } else if (S.mode === "states") {
             if (w.act === "NEW SAVE STATE") S.sel = 0;
             else if (w.act.indexOf("slot") === 0) S.sel = Number(w.act.slice(4)) + 1;
           } else if (S.mode === "confirm" && w.act.indexOf("confirm") === 0) {
@@ -2361,7 +3046,12 @@ function notify_config_change() {
         var t = rows[j];
         if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) {
           if (S.mode === "main") { S.sel = j; mainAction(j); }
-          else if (S.mode === "states") {
+          else if (S.mode === "boss") {
+            if (t.act.indexOf("boss") === 0) {
+              S.bossSel = Number(t.act.slice(4));
+              bossGo();
+            }
+          } else if (S.mode === "states") {
             if (t.act === "NEW SAVE STATE") { S.sel = 0; makeState(); }
             else if (t.act.indexOf("slot") === 0) {
               S.sel = Number(t.act.slice(4)) + 1;
@@ -2378,8 +3068,29 @@ function notify_config_change() {
   }
 
   /* ---------- open/close ---------- */
+  /* pause the engine for real. GM_pause stops the game loop inside the
+     runner (exactly what GX Mobile's pause() does) and the canvas class
+     blurs the frozen frame while the menu is up. */
+  function enginePause() {
+    try { if (typeof GM_pause === "function") GM_pause(); } catch (e) {}
+    var gc = gameCanvas();
+    if (gc) gc.classList.add("paused");
+  }
+  function engineResume() {
+    try { if (typeof GM_unpause === "function") GM_unpause(); } catch (e) {}
+    var gc = gameCanvas();
+    if (gc) { gc.classList.remove("paused"); gc.classList.add("unpaused"); }
+  }
+  function gameLive() {
+    /* "active" is set by the runner glue once the canvas booted - before
+       that there is no engine to pause (and no save to act on) */
+    var gc = gameCanvas();
+    return !!(gc && gc.classList.contains("active"));
+  }
+
   function open() {
     if (S.open) return;
+    if (!gameLive()) return;         /* still on the loading screen */
     if (!ensureCanvas()) return;
     attachLazy();
     refresh();
@@ -2389,14 +3100,14 @@ function notify_config_change() {
     canvas.style.display = "block";
     cancelAnimationFrame(raf);
     loop();
-    if (typeof window.__utPauseHook === "function") window.__utPauseHook();
+    enginePause();
   }
   function close() {
     if (!S.open) return;
     S.open = false;
     cancelAnimationFrame(raf);
     if (canvas) canvas.style.display = "none";
-    if (typeof window.__utResumeHook === "function") window.__utResumeHook();
+    engineResume();
   }
   function isOpen() { return S.open; }
 
@@ -2417,3 +3128,4 @@ function notify_config_change() {
   window.UTPauseMenu = { open: open, close: close, isOpen: isOpen, toggle: function () { S.open ? close() : open(); } };
   window.togglePauseMenu = window.UTPauseMenu.toggle;
 })();
+/* [ut-pausemenu v1.2 DOM overlay removed - the canvas menu above replaced it] */

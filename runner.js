@@ -1275,8 +1275,7 @@ var I, J, Vb = {
             hash: e
         }, f))
     },
-    1557887: () => window.matchMedia("(any-hover: none)").matches || window.matchMedia("(any-hover: hover) and (pointer: coarse)").matches || "undefined" !=
-        typeof window.oprt,
+    1557887: () => window.matchMedia("(any-hover: none)").matches || window.matchMedia("(any-hover: hover) and (pointer: coarse)").matches,
     1558060: (a, b, c, d, e, f, g) => {
         qa = a;
         ra = b;
