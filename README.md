@@ -20,7 +20,9 @@ play with no internet:
 
 ## Custom content in this build
 
-Besides the vanilla game, this build adds a few extras:
+Besides the vanilla game, this build adds a few extras. (All of the game-data
+extras below shipped in **game data v1.1** — the loading-screen footer shows
+the current version; if you're on an older offline copy, re-download it.)
 
 **More Sans death dialogue (genocide route).** Sans's rematch intro now has
 unique lines for deaths 12 through 17 — he used to run out of material after
@@ -71,10 +73,22 @@ helpers in the browser console (F12):
 (restore is best used with the tab freshly reloaded — the background
 save-sync may otherwise overwrite an older restore from IndexedDB.)
 
+**Pause menu (ESC).** The pause menu is built into the game: ESC (while
+windowed) pauses the engine for real, blurs the screen and shows an
+Undertale-styled menu with a red SOUL cursor:
+
+    RESUME   FULLSCREEN   BACKUP SAVE   QUIT
+
+Arrows (or W/S) select, Z/ENTER confirms, X/ESC resumes — mouse works too.
+While in fullscreen the browser keeps ESC for exiting fullscreen, so open
+the menu before going fullscreen (or use F11 to stay windowed while playing).
+QUIT returns to the loading screen. The same menu opens automatically on
+GX Mobile when the app loses focus.
+
 ## Controls
 
-Arrow keys move · Z / ENTER confirm · X cancel · C menu · F4 fullscreen ·
-Shift+Ctrl+E backup your save
+Arrow keys move · Z / ENTER confirm · X cancel · C menu · ESC pause ·
+F4 fullscreen · Shift+Ctrl+E backup your save
 
 ## Repo layout
 

@@ -102,10 +102,70 @@
       @media (prefers-reduced-motion: reduce) {
         #utLoader.done #utHeartFill { animation: none; }
       }
+
+      /* ============ pause menu (Esc) ============ */
+      canvas.paused { filter: blur(2px) grayscale(1); }
+      canvas.unpaused { filter: none; }
+      #pauseMenuContainer {
+        position: fixed; inset: 0; z-index: 9998;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0, 0, 0, 0.55);
+      }
+      #pauseMenuContainer[hidden] { display: none; }
+      #pauseMenuBorder { background: #fff; padding: 3px; }
+      #pauseMenu {
+        background: #000;
+        padding: 20px 36px 14px;
+        text-align: center;
+        font-family: 'Press Start 2P', 'Courier New', monospace;
+        color: #fff;
+        min-width: 300px;
+      }
+      #pauseMenuTitle {
+        font-size: 13px; letter-spacing: 0.3em; margin-bottom: 20px;
+      }
+      #pauseMenu button {
+        display: block; width: 100%;
+        background: none; border: none; cursor: pointer;
+        color: #fff;
+        font-family: inherit;
+        font-size: 10px; letter-spacing: 0.14em;
+        padding: 10px 10px 10px 34px;
+        margin: 3px 0;
+        text-align: left;
+        position: relative;
+        -webkit-user-select: none; user-select: none;
+      }
+      #pauseMenu button.selected { color: #fff200; }
+      #pauseMenu button.selected::before {
+        content: '';
+        position: absolute; left: 8px; top: 50%;
+        transform: translateY(-50%);
+        width: 13px; height: 12px;
+        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 11 10' shape-rendering='crispEdges'%3E%3Cpath fill='%23ff0000' d='M2 0h2v1h3V0h2v1h1v1h1v3h-1v1h-1v1h-1v1h-1v1h-1v1h-1V9H5V8H4V7H3V6H2V5H1V4H0V1h1V0z'/%3E%3C/svg%3E") no-repeat center / contain;
+      }
+      #pauseMenuHint {
+        margin-top: 16px;
+        font-size: 7px; color: #5a5a5a; letter-spacing: 0.14em;
+      }
     </style>
   </head>
   <body>
     <canvas id="canvas" class="emscripten" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+
+    <!-- ============ pause menu (Esc) - built into the game ============ -->
+    <div id="pauseMenuContainer" hidden>
+      <div id="pauseMenuBorder">
+        <div id="pauseMenu">
+          <div id="pauseMenuTitle">PAUSED</div>
+          <button id="resumeButton" type="button">RESUME</button>
+          <button id="fullscreenButton" type="button">FULLSCREEN</button>
+          <button id="backupButton" type="button">BACKUP SAVE</button>
+          <button id="quitButton" type="button">QUIT</button>
+          <div id="pauseMenuHint">&#8593;&#8595; select &middot; Z confirm &middot; X resume</div>
+        </div>
+      </div>
+    </div>
 
     <!-- legacy elements kept for the GameMaker loader (index.js) - kept hidden -->
     <div class="loading" id="legacyLoading" hidden>
@@ -151,6 +211,7 @@
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
+        <span>v1.2</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
@@ -165,7 +226,7 @@
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v1.1';
+      var CACHE_VERSION = 'v1.2';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no

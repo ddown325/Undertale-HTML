@@ -751,7 +751,8 @@ function resume() {
 }
 
 function quitIfSupported() {
-  window.location.href = "../index.html";
+  // Back to the loading screen (the browser build has no parent app to return to).
+  window.location.reload();
 }
 
 function enterFullscreenIfSupported() {
@@ -820,11 +821,7 @@ if (/Android|iPhone|iPod/i.test(navigator.userAgent)) {
   outputContainerElement.hidden = true;
 }
 
-window.addEventListener("load", (event) => {
-  if ((!window.oprt || !window.oprt.enterFullscreen) && (!window.chrome || !window.chrome.runtime || !window.chrome.runtime.sendMessage)) {
-    quitButton.hidden = true;
-  }
-});
+/* QUIT is always available in the browser build - it reloads to the loading screen. */
 
 setWadLoadCallback(() => {
   enterFullscreenIfSupported();
@@ -1604,6 +1601,132 @@ function notify_config_change() {
   window.UndertaleBackups = {
     make: triggerBackup,
     list: listBackups,
-    restore: restoreBackup
+    restore: restoreBackup,
+    toggleFullscreen: toggleFullscreen
   };
+})();
+/* [ut-pause:start] ==========================================================
+
+   PAUSE MENU - built into the game
+   --------------------------------
+   Esc opens the pause menu (windowed mode; in fullscreen the browser keeps
+   Esc for exiting fullscreen - use the menu's own keys there). The menu
+   actually pauses the engine via GM_pause()/GM_unpause() (the same hooks
+   GX Mobile uses), blurs the canvas, and offers:
+
+     RESUME       back to the game
+     FULLSCREEN   same as F4 (entering fullscreen also captures the
+                  Shift+Ctrl+E backup combo via the Keyboard Lock API)
+     BACKUP SAVE  same as Shift+Ctrl+E - one-tap save backup
+     QUIT         back to the loading screen
+
+   Keyboard: arrows/W-S select, Z/ENTER confirm, X/ESC resume. Mouse clicks
+   and hover work too. While the menu is open, game keys are swallowed so
+   nothing leaks into the paused engine. GX Mobile's window.pause() keeps
+   working unchanged - it now finds real DOM elements instead of nulls.
+
+   ========================================================== [ut-pause:end] */
+(function () {
+  "use strict";
+  if (window.__utPauseInit) return;
+  window.__utPauseInit = true;
+
+  var menu = document.getElementById("pauseMenuContainer");
+  var resumeBtn = document.getElementById("resumeButton");
+  var fullscreenBtn = document.getElementById("fullscreenButton");
+  var backupBtn = document.getElementById("backupButton");
+  var quitBtn = document.getElementById("quitButton");
+  if (!menu || !resumeBtn) return; /* elements not on this page - nothing to do */
+
+  var items = [resumeBtn, fullscreenBtn, backupBtn, quitBtn].filter(Boolean);
+  var sel = 0;
+
+  function isOpen() { return !menu.hidden; }
+
+  function select(i) {
+    sel = ((i % items.length) + items.length) % items.length;
+    for (var j = 0; j < items.length; j++) {
+      items[j].classList.toggle("selected", j === sel);
+    }
+  }
+
+  function openMenu() {
+    if (isOpen()) return;
+    pause();                 /* GM_pause + show menu + blur canvas (shared with GX Mobile) */
+    select(0);
+  }
+
+  function closeMenu() {
+    if (!isOpen()) return;
+    resume();                /* GM_unpause + hide menu + unblur (shared with GX Mobile) */
+  }
+
+  function toggleMenu() {
+    if (isOpen()) closeMenu(); else openMenu();
+  }
+
+  /* ---------- button actions ---------- */
+  resumeBtn.addEventListener("click", closeMenu);
+  if (fullscreenBtn) fullscreenBtn.addEventListener("click", function () {
+    if (window.UndertaleBackups && window.UndertaleBackups.toggleFullscreen) {
+      window.UndertaleBackups.toggleFullscreen();
+    }
+  });
+  if (backupBtn) backupBtn.addEventListener("click", function () {
+    if (window.UndertaleBackups) window.UndertaleBackups.make();
+  });
+  if (quitBtn) quitBtn.addEventListener("click", function () {
+    menu.hidden = true;
+    quitIfSupported();
+  });
+  items.forEach(function (b, i) {
+    b.addEventListener("mouseenter", function () { select(i); });
+    b.addEventListener("click", function () { select(i); });
+  });
+
+  /* ---------- keyboard ---------- */
+  var GAME_KEYS = {
+    ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1,
+    Enter: 1, z: 1, Z: 1, x: 1, X: 1, c: 1, C: 1,
+    w: 1, W: 1, s: 1, S: 1, a: 1, A: 1, d: 1, D: 1,
+    " ": 1, Shift: 1, Control: 1, Tab: 1
+  };
+
+  window.addEventListener("keydown", function (e) {
+    if (e.repeat) { if (isOpen()) e.preventDefault(); return; }
+
+    if (!isOpen()) {
+      /* Esc opens the menu - but not while the browser uses Esc to leave fullscreen */
+      if (e.key === "Escape" && !fullscreenElementActive()) {
+        e.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+
+    /* menu open: navigate, confirm, resume - and swallow game keys */
+    var k = e.key;
+    if (k === "ArrowUp" || k === "w" || k === "W") {
+      e.preventDefault(); e.stopPropagation(); select(sel - 1);
+    } else if (k === "ArrowDown" || k === "s" || k === "S") {
+      e.preventDefault(); e.stopPropagation(); select(sel + 1);
+    } else if (k === "Enter" || k === "z" || k === "Z" || k === " ") {
+      e.preventDefault(); e.stopPropagation(); items[sel].click();
+    } else if (k === "Escape" || k === "x" || k === "X") {
+      e.preventDefault(); e.stopPropagation(); closeMenu();
+    } else if (GAME_KEYS[k]) {
+      e.preventDefault(); e.stopPropagation();
+    }
+  }, true);
+
+  function fullscreenElementActive() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  /* keep menu state sane if the page somehow loses focus mid-menu */
+  window.addEventListener("blur", function () {
+    if (isOpen()) closeMenu();
+  });
+
+  window.togglePauseMenu = toggleMenu;
 })();
