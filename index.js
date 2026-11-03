@@ -1298,3 +1298,312 @@ function notify_config_change() {
 
   wallpaper_update_config(JSON.stringify(wallpaperConfig));
 }
+
+/* [ut-backup:start] ==========================================================
+
+   DETERMINATION BACKUP  --  Shift+Ctrl+W
+   --------------------------------------
+   One keystroke snapshots the save mirror (every "ut*" localStorage key the
+   save-sync system maintains) into a timestamped backup slot. The last 5
+   slots are kept, older ones are pruned automatically. A small Undertale-
+   style overlay confirms the backup in-game.
+
+   Related keys:
+     F4            toggle fullscreen (same key as the official PC release)
+     Shift+Ctrl+W  make a backup
+
+   Ctrl+Shift+W normally closes the browser window and never reaches the
+   page. Two things make it work here: (1) a plain keydown listener, which
+   is enough in browsers/contexts that do deliver the combo, and (2) while
+   in fullscreen we call navigator.keyboard.lock() so Chromium delivers the
+   reserved combo to the page instead of closing the window. So on Chrome/
+   Edge: press F4 first, then Shift+Ctrl+W works.
+
+   Console helpers (window.UndertaleBackups):
+     .make()            trigger a backup now
+     .list()            show the kept backup slots
+     .restore(id)       copy a backup's keys back over the live mirror
+                       (best used with the game closed - the save-sync may
+                       overwrite an older restore from IndexedDB otherwise)
+
+   Backup records themselves live under "ut::backup::" and are never
+   included in later snapshots.
+
+   ========================================================== [ut-backup:end] */
+(function () {
+  "use strict";
+  if (window.__utBackupInit) return;
+  window.__utBackupInit = true;
+
+  var MIRROR_PREFIX = "ut";          /* savesync localStorage prefix        */
+  var BACKUP_PREFIX = "ut::backup::";
+  var MAX_BACKUPS = 5;
+
+  /* ---------- flavor text ---------- */
+  var FLAVOR_SAVED = [
+    "(Knowing your progress is safe fills you with determination.)",
+    "(A safe copy of your file exists now. It fills you with determination.)",
+    "(Somewhere, a little star is keeping watch over your data.)",
+    "(You feel your save data being cradled gently. You are filled with determination.)",
+    "(You are filled with determination.)"
+  ];
+  var FLAVOR_EMPTY = [
+    "(Nothing has been saved yet. But you are still filled with determination.)",
+    "(You feel like this journey has only just begun.)"
+  ];
+  var FLAVOR_FAIL = [
+    "(The backup box is full. Your determination persists anyway.)"
+  ];
+
+  function pick(list) {
+    return list[Math.floor(Math.random() * list.length)];
+  }
+
+  /* ---------- snapshot / restore ---------- */
+  function collectMirror() {
+    var out = {}, files = 0, chars = 0;
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (!k || k.indexOf(MIRROR_PREFIX) !== 0) continue;  /* only ut*     */
+      if (k.indexOf("ut::") === 0) continue;                /* our records */
+      var v = localStorage.getItem(k);
+      out[k] = v;
+      files++;
+      chars += k.length + (v ? v.length : 0);
+    }
+    return { data: out, files: files, bytes: chars * 2 };  /* UTF-16 bytes */
+  }
+
+  function backupIds() {
+    var ids = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf(BACKUP_PREFIX) === 0) {
+        var id = Number(k.substring(BACKUP_PREFIX.length));
+        if (!isNaN(id) && id > 0) ids.push(id);
+      }
+    }
+    ids.sort(function (a, b) { return b - a; });
+    return ids;
+  }
+
+  function makeBackup() {
+    var snap = collectMirror();
+    if (snap.files === 0) {
+      return { ok: true, empty: true, files: 0, bytes: 0, slot: backupIds().length };
+    }
+    var id = Date.now();
+    var record = { t: id, files: snap.files, bytes: snap.bytes, data: snap.data };
+    try {
+      localStorage.setItem(BACKUP_PREFIX + id, JSON.stringify(record));
+    } catch (e) {
+      return { ok: false, files: snap.files, bytes: snap.bytes, slot: backupIds().length };
+    }
+    var ids = backupIds();
+    for (var j = MAX_BACKUPS; j < ids.length; j++) {
+      localStorage.removeItem(BACKUP_PREFIX + ids[j]);
+    }
+    return { ok: true, empty: false, files: snap.files, bytes: snap.bytes, slot: Math.min(ids.length, MAX_BACKUPS) };
+  }
+
+  /* ---------- overlay ---------- */
+  var overlay = null, flavorEl = null, metaEl = null, titleEl = null, hideTimer = -1;
+
+  function buildOverlay() {
+    if (overlay) return;
+    var box = document.createElement("div");
+    box.id = "utBackupOverlay";
+
+    var star = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    star.setAttribute("viewBox", "0 0 24 24");
+    star.setAttribute("width", "26");
+    star.setAttribute("height", "26");
+    star.setAttribute("class", "utb-star");
+    star.setAttribute("aria-hidden", "true");
+    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M12 0 L14.8 9.2 L24 12 L14.8 14.8 L12 24 L9.2 14.8 L0 12 L9.2 9.2 Z");
+    path.setAttribute("fill", "#fff200");
+    star.appendChild(path);
+
+    titleEl = document.createElement("div");
+    titleEl.className = "utb-title";
+
+    flavorEl = document.createElement("div");
+    flavorEl.className = "utb-flavor";
+
+    metaEl = document.createElement("div");
+    metaEl.className = "utb-meta";
+
+    box.appendChild(star);
+    box.appendChild(titleEl);
+    box.appendChild(flavorEl);
+    box.appendChild(metaEl);
+
+    var style = document.createElement("style");
+    style.textContent =
+      "#utBackupOverlay{position:fixed;left:50%;bottom:14vh;transform:translate(-50%,0);" +
+      "background:#000;border:3px solid #fff;box-shadow:0 0 0 3px #000, inset 0 0 0 1px #000;" +
+      "padding:14px 22px 12px;text-align:center;z-index:99999;pointer-events:none;" +
+      "font-family:'Courier New','Lucida Console',Monaco,monospace;color:#fff;" +
+      "max-width:min(82vw,480px);opacity:0;transition:opacity .18s steps(3,end);}" +
+      "#utBackupOverlay.utb-show{opacity:1;}" +
+      "#utBackupOverlay .utb-star{animation:utb-spin 2.4s linear infinite;margin:0 auto 6px;}" +
+      "#utBackupOverlay .utb-title{font-size:15px;letter-spacing:3px;margin-bottom:8px;}" +
+      "#utBackupOverlay .utb-flavor{font-size:13px;line-height:1.55;}" +
+      "#utBackupOverlay .utb-meta{font-size:11px;color:#9c9c9c;margin-top:8px;letter-spacing:1px;}" +
+      "@keyframes utb-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}" +
+      "@media (prefers-reduced-motion:reduce){#utBackupOverlay .utb-star{animation:none;}}";
+
+    document.head.appendChild(style);
+    document.body.appendChild(box);
+    overlay = box;
+  }
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function showOverlay(result) {
+    buildOverlay();
+    var line, title, meta;
+    if (!result.ok) {
+      title = "DETERMINATION";
+      line = pick(FLAVOR_FAIL);
+      meta = "backup failed";
+    } else if (result.empty) {
+      title = "DETERMINATION";
+      line = pick(FLAVOR_EMPTY);
+      meta = "no save data yet";
+    } else {
+      title = "BACKUP SAVED";
+      line = pick(FLAVOR_SAVED);
+      meta = "slot " + result.slot + "/" + MAX_BACKUPS + "  ·  " +
+             new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) +
+             "  ·  " + fmtBytes(result.bytes);
+    }
+    titleEl.textContent = title;
+    flavorEl.textContent = "* " + line;
+    metaEl.textContent = meta;
+    overlay.classList.add("utb-show");
+    if (hideTimer !== -1) clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () {
+      hideTimer = -1;
+      overlay.classList.remove("utb-show");
+    }, 3200);
+  }
+
+  function triggerBackup() {
+    var result = makeBackup();
+    showOverlay(result);
+    return result;
+  }
+
+  /* ---------- fullscreen (F4) + keyboard lock ---------- */
+  function fullscreenElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  function lockReservedKeys() {
+    try {
+      if (navigator.keyboard && navigator.keyboard.lock) {
+        var p = navigator.keyboard.lock(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "KeyW"]);
+        if (p && p.catch) p.catch(function () {});
+      }
+    } catch (e) { /* not supported - the plain listener still tries */ }
+  }
+
+  function unlockReservedKeys() {
+    try {
+      if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock();
+    } catch (e) {}
+  }
+
+  function toggleFullscreen() {
+    var el = document.documentElement;
+    if (fullscreenElement()) {
+      if (document.exitFullscreen) {
+        var p = document.exitFullscreen();
+        if (p && p.catch) p.catch(function () {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
+      return;
+    }
+    try {
+      var r;
+      if (el.requestFullscreen) {
+        r = el.requestFullscreen();
+      } else if (el.webkitRequestFullscreen) {
+        r = el.webkitRequestFullscreen();
+      }
+      if (r && r.then) r.then(lockReservedKeys).catch(function () {});
+      else lockReservedKeys();
+    } catch (e) { /* fullscreen refused (no user gesture etc.) - ignore */ }
+  }
+
+  document.addEventListener("fullscreenchange", function () {
+    if (!fullscreenElement()) unlockReservedKeys();
+  });
+  document.addEventListener("webkitfullscreenchange", function () {
+    if (!fullscreenElement()) unlockReservedKeys();
+  });
+
+  /* ---------- keys ---------- */
+  window.addEventListener("keydown", function (e) {
+    if (e.repeat) return;
+
+    /* F4 - fullscreen, same key as the official PC release */
+    if (e.key === "F4" || e.code === "F4") {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
+
+    /* Shift+Ctrl+W - Determination Backup */
+    var isW = e.code === "KeyW" || (typeof e.key === "string" && e.key.toLowerCase() === "w");
+    if (e.ctrlKey && e.shiftKey && isW) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      triggerBackup();
+    }
+  }, true);
+
+  /* ---------- console helpers ---------- */
+  function listBackups() {
+    return backupIds().map(function (id) {
+      var raw = null;
+      try { raw = JSON.parse(localStorage.getItem(BACKUP_PREFIX + id)); } catch (e) {}
+      return {
+        id: id,
+        when: new Date(id).toLocaleString(),
+        files: raw ? raw.files : "?",
+        bytes: raw ? raw.bytes : "?"
+      };
+    });
+  }
+
+  function restoreBackup(id) {
+    var raw;
+    try { raw = JSON.parse(localStorage.getItem(BACKUP_PREFIX + id)); }
+    catch (e) { raw = null; }
+    if (!raw || !raw.data) return 0;
+    var n = 0;
+    for (var k in raw.data) {
+      if (!Object.prototype.hasOwnProperty.call(raw.data, k)) continue;
+      localStorage.setItem(k, raw.data[k]);
+      n++;
+    }
+    console.log("[UndertaleBackups] restored " + n + " keys from " + new Date(id).toLocaleString() +
+                " - reload the page to pick them up.");
+    return n;
+  }
+
+  window.UndertaleBackups = {
+    make: triggerBackup,
+    list: listBackups,
+    restore: restoreBackup
+  };
+})();
