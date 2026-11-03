@@ -46,20 +46,20 @@ AT/DF stats:
 Deliberately small numbers — they're a reward for themed loadouts, not a
 balance change.
 
-**Determination Backup (Shift+Ctrl+W).** One keystroke snapshots your
+**Determination Backup (Shift+Ctrl+E).** One keystroke snapshots your
 save data (every save key the save-sync system maintains) into a timestamped
 backup slot — the last 5 slots are kept, older ones pruned automatically.
 A small in-game overlay confirms it with a spinning SAVE star:
 
     * (Knowing your progress is safe fills you with determination.)
 
-Because browsers normally reserve Ctrl+Shift+W for closing the window, the
-combo is captured two ways: a plain keydown listener (enough wherever the
-browser delivers the combo), and — while in fullscreen — the Keyboard Lock
-API, so Chrome/Edge hand the combo to the game instead of closing your
-window. **F4 toggles fullscreen** (same key as the official PC release), so
-the reliable sequence on Chrome/Edge is: `F4` first, then `Shift+Ctrl+W`
-works as many times as you like.
+Some browsers reserve Ctrl+Shift+E (Firefox opens its Network monitor with
+it), so the combo is captured two ways: a plain keydown listener (enough
+wherever the browser delivers the combo), and — while in fullscreen — the
+Keyboard Lock API, so reserved combos still reach the game. **F4 toggles
+fullscreen** (same key as the official PC release), so the reliable sequence
+on Firefox is: `F4` first, then `Shift+Ctrl+E` works as many times as you
+like.
 
 Backups live in your browser storage under `ut::backup::*`. Power-user
 helpers in the browser console (F12):
@@ -74,7 +74,7 @@ save-sync may otherwise overwrite an older restore from IndexedDB.)
 ## Controls
 
 Arrow keys move · Z / ENTER confirm · X cancel · C menu · F4 fullscreen ·
-Shift+Ctrl+W backup your save
+Shift+Ctrl+E backup your save
 
 ## Repo layout
 

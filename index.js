@@ -1301,7 +1301,7 @@ function notify_config_change() {
 
 /* [ut-backup:start] ==========================================================
 
-   DETERMINATION BACKUP  --  Shift+Ctrl+W
+   DETERMINATION BACKUP  --  Shift+Ctrl+E
    --------------------------------------
    One keystroke snapshots the save mirror (every "ut*" localStorage key the
    save-sync system maintains) into a timestamped backup slot. The last 5
@@ -1310,14 +1310,14 @@ function notify_config_change() {
 
    Related keys:
      F4            toggle fullscreen (same key as the official PC release)
-     Shift+Ctrl+W  make a backup
+     Shift+Ctrl+E  make a backup
 
-   Ctrl+Shift+W normally closes the browser window and never reaches the
-   page. Two things make it work here: (1) a plain keydown listener, which
-   is enough in browsers/contexts that do deliver the combo, and (2) while
-   in fullscreen we call navigator.keyboard.lock() so Chromium delivers the
-   reserved combo to the page instead of closing the window. So on Chrome/
-   Edge: press F4 first, then Shift+Ctrl+W works.
+   Some browsers reserve Ctrl+Shift+E (Firefox opens the Network monitor
+   with it), and reserved combos never reach the page. Two things make it
+   work here: (1) a plain keydown listener, which is enough in browsers/
+   contexts that do deliver the combo, and (2) while in fullscreen we call
+   navigator.keyboard.lock() so the browser delivers the reserved combo to
+   the page instead. So on Firefox: press F4 first, then Shift+Ctrl+E works.
 
    Console helpers (window.UndertaleBackups):
      .make()            trigger a backup now
@@ -1508,7 +1508,7 @@ function notify_config_change() {
   function lockReservedKeys() {
     try {
       if (navigator.keyboard && navigator.keyboard.lock) {
-        var p = navigator.keyboard.lock(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "KeyW"]);
+        var p = navigator.keyboard.lock(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "KeyE"]);
         if (p && p.catch) p.catch(function () {});
       }
     } catch (e) { /* not supported - the plain listener still tries */ }
@@ -1561,9 +1561,9 @@ function notify_config_change() {
       return;
     }
 
-    /* Shift+Ctrl+W - Determination Backup */
-    var isW = e.code === "KeyW" || (typeof e.key === "string" && e.key.toLowerCase() === "w");
-    if (e.ctrlKey && e.shiftKey && isW) {
+    /* Shift+Ctrl+E - Determination Backup */
+    var isE = e.code === "KeyE" || (typeof e.key === "string" && e.key.toLowerCase() === "e");
+    if (e.ctrlKey && e.shiftKey && isE) {
       e.preventDefault();
       e.stopPropagation();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
