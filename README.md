@@ -30,65 +30,88 @@ unique lines for deaths 12 through 17 — he used to run out of material after
 always saying the same thing. He also has extra taunts during the long haul
 of his fight (turn 24+).
 
-**Equipment set bonuses.** Wearing a matching weapon + armor pair from the
-same area gives a small bonus, shown when you equip it and included in your
-AT/DF stats:
+**Equipment set bonuses.** Wearing the *exact* matching weapon + armor pair
+gives a small, pair-specific bonus — every set does something different now,
+not just raw stats (the bonus is recomputed when you equip, so you see it
+right away):
 
 | Set | Bonus |
 |---|---|
-| Stick + Bandage | DEF +1 |
-| Toy Knife + Faded Ribbon | ATK +1, DEF +1 |
-| Tough Glove + Manly Bandanna | ATK +2 |
-| Ballet Shoes + Old Tutu | DEF +3 |
-| Torn Notebook + Cloudy Glasses | ATK +1, DEF +2 |
-| Burnt Pan + Stained Apron | DEF +3 |
-| Empty Gun + Cowboy Hat | ATK +2, DEF +1 |
-| Worn Dagger + Heart Locket | ATK +2, DEF +2 |
+| Stick + Bandage | **Comfort food** — items heal +5 HP |
+| Toy Knife + Faded Ribbon | ATK +2, DEF +1 |
+| Tough Glove + Manly Bandanna | ATK +3, DEF +1 |
+| Ballet Shoes + Old Tutu | **Pirouette** — i-frames last 60% longer |
+| Torn Notebook + Cloudy Glasses | ATK +2, DEF +2 |
+| Burnt Pan + Stained Apron | **Home cooking** — items heal +10 HP |
+| Empty Gun + Cowboy Hat | ATK +3, DEF +2 |
+| Worn Dagger + Heart Locket | ATK +2, DEF +4 |
 
-Deliberately small numbers — they're a reward for themed loadouts, not a
-balance change.
+The equip message tells you what the set does. (game data v1.3 — the loading
+footer shows the version; if your offline copy is older, re-download it.)
 
-**Determination Backup (Shift+Ctrl+E).** One keystroke snapshots your
-save data (every save key the save-sync system maintains) into a timestamped
-backup slot — the last 5 slots are kept, older ones pruned automatically.
-A small in-game overlay confirms it with a spinning SAVE star:
+**Save States + Determination Backup.** Your saves are snapshotted into
+tagged *save states* — every state records its route and where you were:
 
-    * (Knowing your progress is safe fills you with determination.)
+- **route state** — PACIFIST (no kills) / NEUTRAL / GENOCIDE (computed with
+  the game's own `scr_murderlv` logic, from your save's flags)
+- **boss checkpoint** — SANS, UNDYNE THE UNDYING, ASGORE, METTATON EX / NEO,
+  FLOWEY, PAPYRUS, TORIEL, ASRIEL
+- name, LV, area and timestamp — and slots can be restored or deleted from
+  the menu
+
+**Shift+Ctrl+E** makes a state instantly (a small in-game overlay confirms
+it with a spinning SAVE star), and **AUTO-BACKUP** (on by default, toggle in
+the pause menu's SAVE STATES screen) snapshots your save whenever it changes
+— no menu needed — at most once every 5 minutes. Up to 24 states are kept;
+the oldest automatic ones are pruned first.
+
+Restoring writes the state back over both the save mirror *and* the game's
+own file system (IndexedDB), then reloads — you come back exactly where the
+state was taken.
 
 Some browsers reserve Ctrl+Shift+E (Firefox opens its Network monitor with
 it), so the combo is captured two ways: a plain keydown listener (enough
 wherever the browser delivers the combo), and — while in fullscreen — the
-Keyboard Lock API, so reserved combos still reach the game. **F4 toggles
-fullscreen** (same key as the official PC release), so the reliable sequence
-on Firefox is: `F4` first, then `Shift+Ctrl+E` works as many times as you
-like.
+Keyboard Lock API. **F4 toggles fullscreen** (same key as the official PC
+release), so on Firefox: `F4` first, then `Shift+Ctrl+E` works as many
+times as you like.
 
-Backups live in your browser storage under `ut::backup::*`. Power-user
-helpers in the browser console (F12):
+Console helpers (F12):
 
-    UndertaleBackups.list()          // show the kept backup slots
-    UndertaleBackups.make()          // trigger a backup now
-    UndertaleBackups.restore(id)     // copy a slot back over the live save
+    UndertaleBackups.list()          // show the save states (with route/boss tags)
+    UndertaleBackups.make()          // make a state now
+    UndertaleBackups.restore(id)     // restore a state over the live save
+    UndertaleBackups.del(id)         // delete a state
+    UndertaleBackups.auto()          // show / set auto-backup
 
-(restore is best used with the tab freshly reloaded — the background
-save-sync may otherwise overwrite an older restore from IndexedDB.)
+**Pause menu (ESC).** ESC pauses the engine for real and opens a menu
+drawn *in the game's own visual language*: a 640x480 canvas overlay that
+shares the game canvas's pixel grid, an embedded 5x7 pixel font, the red
+SOUL as the cursor, selected entries in yellow — plus a live stats strip
+(name, LV, HP and route state):
 
-**Pause menu (ESC).** The pause menu is built into the game: ESC (while
-windowed) pauses the engine for real, blurs the screen and shows an
-Undertale-styled menu with a red SOUL cursor:
+    RESUME   SAVE STATES   FULLSCREEN   QUIT
 
-    RESUME   FULLSCREEN   BACKUP SAVE   QUIT
+**SAVE STATES** is the save-state manager described above: filter by route
+(ALL / PACIFIST / NEUTRAL / GENOCIDE), make a state, restore (Z), delete
+(D), toggle AUTO-BACKUP — all on the same pixel-font screen.
 
-Arrows (or W/S) select, Z/ENTER confirms, X/ESC resumes — mouse works too.
-While in fullscreen the browser keeps ESC for exiting fullscreen, so open
-the menu before going fullscreen (or use F11 to stay windowed while playing).
+Arrows (or WASD) select, Z/ENTER confirms, X/ESC goes back — mouse works
+too. While in fullscreen the browser keeps ESC for exiting fullscreen, so
+open the menu before going fullscreen (or use F11 to stay windowed).
 QUIT returns to the loading screen. The same menu opens automatically on
 GX Mobile when the app loses focus.
+
+*(v1.3 also fixes a nasty bug from earlier builds: backup records were
+imported by the save-sync into the game's file system, where they could
+crash the boot with "EXCEPTION THROWN". Records now live outside the sync's
+namespace, existing junk is cleaned up automatically, and the sync skips
+record keys entirely.)*
 
 ## Controls
 
 Arrow keys move · Z / ENTER confirm · X cancel · C menu · ESC pause ·
-F4 fullscreen · Shift+Ctrl+E backup your save
+F4 fullscreen · Shift+Ctrl+E make a save state
 
 ## Repo layout
 

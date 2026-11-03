@@ -378,7 +378,7 @@
                         // Skip companion timestamp meta keys we create (suffix '::ts')
                         if (localKey.endsWith('::ts')) continue;
 
-                        if (localKey && localKey.startsWith(CONFIG.localStoragePrefix)) {
+                        if (localKey && localKey.startsWith(CONFIG.localStoragePrefix) && localKey.indexOf('::') === -1) { /* "::"-keys are records, not save files */
                             const indexedDBKey = localKey.substring(CONFIG.localStoragePrefix.length);
                             const dataString = localStorage.getItem(localKey);
                             try {

@@ -10,7 +10,7 @@ var qrElement = document.getElementById("QRCode");
 var qr2Element = document.getElementById("QR2Code");
 var qrButton = document.getElementById("QRButton");
 var qr2Button = document.getElementById("QR2Button");
-var pauseMenu = document.getElementById("pauseMenuContainer");
+var pauseMenu = document.getElementById("pauseMenuContainer"); /* legacy (hidden) */
 var resumeButton = document.getElementById("resumeButton");
 var quitButton = document.getElementById("quitButton");
 canvasElement.addEventListener("click", function() { canvasElement.focus(); });
@@ -735,15 +735,15 @@ function pause() { // Don't change the name - GX Mobile calls it when the app be
   if (!canvasElement.classList.contains("active")) { // Wait for the canvas to load.
     return
   }
-  
+
   GM_pause();
-  pauseMenu.hidden = false;
   canvasElement.classList.add("paused");
+  if (window.UTPauseMenu) { window.UTPauseMenu.open(); } /* the real in-game menu */
 }
 
 function resume() {
   GM_unpause();
-  pauseMenu.hidden = true;
+  if (window.UTPauseMenu) { window.UTPauseMenu.close(); }
   canvasElement.classList.remove("paused");
   canvasElement.classList.add("unpaused");
   enterFullscreenIfSupported();
@@ -1298,33 +1298,26 @@ function notify_config_change() {
 
 /* [ut-backup:start] ==========================================================
 
-   DETERMINATION BACKUP  --  Shift+Ctrl+E
-   --------------------------------------
-   One keystroke snapshots the save mirror (every "ut*" localStorage key the
-   save-sync system maintains) into a timestamped backup slot. The last 5
-   slots are kept, older ones are pruned automatically. A small Undertale-
-   style overlay confirms the backup in-game.
+   DETERMINATION BACKUP  --  Shift+Ctrl+E  (and the pause menu's SAVE STATES)
+   ---------------------------------------------------------
+   One keystroke (or menu action) snapshots the save mirror (every "ut*" key
+   the save-sync maintains) into a tagged backup slot:
 
-   Related keys:
-     F4            toggle fullscreen (same key as the official PC release)
-     Shift+Ctrl+E  make a backup
+     route state  PACIFIST / NEUTRAL / GENOCIDE (via the game's own murderlv)
+     boss tag     SANS, UNDYNE THE UNDYING, ASGORE, ... checkpoint context
+     stats        name / LV / location, plus the timestamp + size
 
-   Some browsers reserve Ctrl+Shift+E (Firefox opens the Network monitor
-   with it), and reserved combos never reach the page. Two things make it
-   work here: (1) a plain keydown listener, which is enough in browsers/
-   contexts that do deliver the combo, and (2) while in fullscreen we call
-   navigator.keyboard.lock() so the browser delivers the reserved combo to
-   the page instead. So on Firefox: press F4 first, then Shift+Ctrl+E works.
+   Up to 24 slots are kept (auto-backups pruned first). AUTO-BACKUP (on by
+   default, toggle in SAVE STATES) snapshots your save whenever it changes -
+   no menu needed - at most once every 5 minutes.
 
-   Console helpers (window.UndertaleBackups):
-     .make()            trigger a backup now
-     .list()            show the kept backup slots
-     .restore(id)       copy a backup's keys back over the live mirror
-                       (best used with the game closed - the save-sync may
-                       overwrite an older restore from IndexedDB otherwise)
+   Restore copies a slot back over BOTH the localStorage mirror and the
+   GameMaker file system (IndexedDB /_savedata), then prompts a reload.
+   Delete is available from the menu. Backups live under "ut::backup::*"
+   and are never included in later snapshots.
 
-   Backup records themselves live under "ut::backup::" and are never
-   included in later snapshots.
+   Console helpers (window.UndertaleBackups): .make() .list() .restore(id)
+   .del(id) .auto(on/off) .toggleFullscreen()
 
    ========================================================== [ut-backup:end] */
 (function () {
@@ -1332,9 +1325,17 @@ function notify_config_change() {
   if (window.__utBackupInit) return;
   window.__utBackupInit = true;
 
-  var MIRROR_PREFIX = "ut";          /* savesync localStorage prefix        */
-  var BACKUP_PREFIX = "ut::backup::";
-  var MAX_BACKUPS = 5;
+  var MIRROR_PREFIX = "ut";
+  /* NOTE: the prefix deliberately does NOT start with "ut" - the save-sync
+     imports every "ut*" localStorage key into the GameMaker file system
+     (IndexedDB /_savedata), and a backup record there is not a valid file
+     node, which crashes the runner's IDBFS mount at boot (flaky "EXCEPTION
+     THROWN"). The old "ut::backup::*" records are migrated away at load. */
+  var BACKUP_PREFIX = "soulstate::";
+  var AUTO_KEY = "soulstate::auto";
+  var AUTO_EVERY_MS = 5 * 60 * 1000;
+  var MAX_BACKUPS = 24;
+  var MAX_AUTO_KEPT = 12;
 
   /* ---------- flavor text ---------- */
   var FLAVOR_SAVED = [
@@ -1348,27 +1349,67 @@ function notify_config_change() {
     "(Nothing has been saved yet. But you are still filled with determination.)",
     "(You feel like this journey has only just begun.)"
   ];
-  var FLAVOR_FAIL = [
-    "(The backup box is full. Your determination persists anyway.)"
-  ];
+  var FLAVOR_FAIL = ["(The backup box is full. Your determination persists anyway.)"];
 
-  function pick(list) {
-    return list[Math.floor(Math.random() * list.length)];
-  }
+  function pick(l) { return l[Math.floor(Math.random() * l.length)]; }
+
+  /* ---------- one-time migration / cleanup ----------
+     v1.2-era backups lived under "ut::backup::*" and the save-sync imported
+     them into the game's file system, where they can crash the IDBFS mount.
+     Move the records to the new prefix and delete the imported copies. */
+  (function migrate() {
+    var OLD = "ut::backup::", moved = 0;
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(OLD) === 0) keys.push(k);
+      }
+      for (var j = 0; j < keys.length; j++) {
+        var kk = keys[j];
+        if (kk === OLD + "auto") {
+          if (localStorage.getItem(AUTO_KEY) === null) {
+            localStorage.setItem(AUTO_KEY, localStorage.getItem(kk));
+          }
+        } else {
+          var nk = BACKUP_PREFIX + kk.slice(OLD.length);
+          if (localStorage.getItem(nk) === null) localStorage.setItem(nk, localStorage.getItem(kk));
+          moved++;
+        }
+        localStorage.removeItem(kk);
+      }
+    } catch (e) {}
+    /* the IndexedDB junk purge is NOT done here: opening /_savedata at page
+       load races the runner's own IDBFS mount (cached boots run at ~2 s) and
+       can abort it -> "EXCEPTION THROWN". It runs lazily post-boot instead. */
+    if (moved) console.log("[UndertaleBackups] migrated " + moved + " old backup records to " + BACKUP_PREFIX);
+  })();
 
   /* ---------- snapshot / restore ---------- */
   function collectMirror() {
     var out = {}, files = 0, chars = 0;
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
-      if (!k || k.indexOf(MIRROR_PREFIX) !== 0) continue;  /* only ut*     */
-      if (k.indexOf("ut::") === 0) continue;                /* our records */
+      if (!k || k.indexOf(MIRROR_PREFIX) !== 0) continue;
+      if (k.indexOf("ut::") === 0) continue;
       var v = localStorage.getItem(k);
       out[k] = v;
       files++;
       chars += k.length + (v ? v.length : 0);
     }
-    return { data: out, files: files, bytes: chars * 2 };  /* UTF-16 bytes */
+    return { data: out, files: files, bytes: chars * 2 };
+  }
+
+  function metaOfNow() {
+    if (!window.UTSaveInfo) return null;
+    var info = window.UTSaveInfo.parse();
+    if (!info) return null;
+    return {
+      name: info.name, lv: info.lv, kills: info.kills, xp: info.xp,
+      room: info.room, roomName: info.roomName, area: info.area,
+      route: info.route, boss: info.boss, murderlv: info.murderlv,
+      playTime: info.time
+    };
   }
 
   function backupIds() {
@@ -1384,23 +1425,180 @@ function notify_config_change() {
     return ids;
   }
 
-  function makeBackup() {
+  function readRecord(id) {
+    try { return JSON.parse(localStorage.getItem(BACKUP_PREFIX + id)); }
+    catch (e) { return null; }
+  }
+
+  function prune() {
+    var ids = backupIds();
+    if (ids.length <= MAX_BACKUPS) return;
+    var recs = [];
+    for (var i = 0; i < ids.length; i++) {
+      var r = readRecord(ids[i]);
+      recs.push({ id: ids[i], t: r ? r.t : ids[i], auto: r ? !!r.auto : false });
+    }
+    /* deletion order: the oldest AUTO states first, then the oldest states */
+    recs.sort(function (a, b) {
+      if (a.auto !== b.auto) return a.auto ? -1 : 1;   /* autos deleted first */
+      return a.t - b.t;                                 /* oldest first       */
+    });
+    var excess = ids.length - MAX_BACKUPS;
+    for (var d = 0; d < excess && d < recs.length; d++) {
+      localStorage.removeItem(BACKUP_PREFIX + recs[d].id);
+    }
+  }
+
+  function makeBackup(opts) {
+    opts = opts || {};
+    purgeIdbJunk();
     var snap = collectMirror();
     if (snap.files === 0) {
       return { ok: true, empty: true, files: 0, bytes: 0, slot: backupIds().length };
     }
     var id = Date.now();
-    var record = { t: id, files: snap.files, bytes: snap.bytes, data: snap.data };
+    var record = {
+      t: id, files: snap.files, bytes: snap.bytes,
+      data: snap.data, meta: metaOfNow(), auto: !!opts.auto
+    };
     try {
       localStorage.setItem(BACKUP_PREFIX + id, JSON.stringify(record));
     } catch (e) {
       return { ok: false, files: snap.files, bytes: snap.bytes, slot: backupIds().length };
     }
-    var ids = backupIds();
-    for (var j = MAX_BACKUPS; j < ids.length; j++) {
-      localStorage.removeItem(BACKUP_PREFIX + ids[j]);
+    prune();
+    return {
+      ok: true, empty: false, files: snap.files, bytes: snap.bytes,
+      slot: backupIds().length, meta: record.meta, id: id
+    };
+  }
+
+  /* ---------- IndexedDB (GameMaker file system) writes ---------- */
+  function idbPutNode(key, text) {
+    return new Promise(function (resolve) {
+      var bytes;
+      try { bytes = new TextEncoder().encode(text); }
+      catch (e) {
+        var s = unescape(encodeURIComponent(text));
+        var arr = new Uint8Array(s.length);
+        for (var i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
+        bytes = arr;
+      }
+      var node = { timestamp: new Date(), mode: 33206, contents: bytes.buffer };
+      var req;
+      try { req = indexedDB.open("/_savedata"); }
+      catch (e) { resolve(false); return; }
+      req.onsuccess = function (e) {
+        try {
+          var db = e.target.result;
+          var tx = db.transaction(["FILE_DATA"], "readwrite");
+          tx.objectStore("FILE_DATA").put(node, key);
+          tx.oncomplete = function () { resolve(true); db.close(); };
+          tx.onerror = function () { resolve(false); db.close(); };
+        } catch (er) { resolve(false); }
+      };
+      req.onerror = function () { resolve(false); };
+    });
+  }
+
+  function mirrorToIdbKey(k) {
+    if (k.indexOf("ut/_savedata/") === 0) return k.slice(2);          /* /_savedata/x   */
+    if (k.length > 2 && k.indexOf("ut") === 0 && k.indexOf("/") > 2) return null; /* not a flat game file */
+    var name = k.slice(2);
+    return /^[\w.\-]+$/.test(name) ? "/_savedata/" + name : null;
+  }
+
+  function restoreBackup(id) {
+    var raw = readRecord(id);
+    if (!raw || !raw.data) return { ok: false, n: 0 };
+    var n = 0, idbJobs = [];
+    for (var k in raw.data) {
+      if (!Object.prototype.hasOwnProperty.call(raw.data, k)) continue;
+      localStorage.setItem(k, raw.data[k]);
+      n++;
+      var idbKey = mirrorToIdbKey(k);
+      if (idbKey && window.UTSaveInfo) {
+        var txt = window.UTSaveInfo.decodeMirror(raw.data[k]);
+        if (typeof txt === "string") idbJobs.push(idbPutNode(idbKey, txt));
+      }
     }
-    return { ok: true, empty: false, files: snap.files, bytes: snap.bytes, slot: Math.min(ids.length, MAX_BACKUPS) };
+    return { ok: true, n: n, idb: idbJobs.length ? Promise.all(idbJobs) : Promise.resolve([]) };
+  }
+
+  function deleteBackup(id) {
+    localStorage.removeItem(BACKUP_PREFIX + id);
+    return true;
+  }
+
+  /* ---------- auto-backup ---------- */
+  function autoEnabled() {
+    var v = localStorage.getItem(AUTO_KEY);
+    return v === null ? true : v === "1";
+  }
+  function setAuto(on) { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); }
+
+  var lastAutoAt = 0, lastSig = null;
+  function mirrorSignature() {
+    var h = 0, s = "";
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (!k || k.indexOf("ut/_savedata/") !== 0) continue;
+      if (k.indexOf("::") >= 0) continue;
+      s += k + "\u0001" + (localStorage.getItem(k) || "") + "\u0002";
+    }
+    for (var j = 0; j < s.length; j++) {
+      h = (h * 31 + s.charCodeAt(j)) | 0;
+    }
+    return h;
+  }
+
+  setInterval(function () {
+    if (!autoEnabled()) return;
+    var sig = mirrorSignature();
+    if (sig !== lastSig) {
+      if (lastSig !== null && Date.now() - lastAutoAt >= AUTO_EVERY_MS && sig !== 0) {
+        lastAutoAt = Date.now();
+        makeBackup({ auto: true });
+      }
+      lastSig = sig;
+    }
+  }, 15000);
+  lastSig = mirrorSignature();
+  window.addEventListener("beforeunload", function () {
+    /* a save that changed in the final seconds still gets caught */
+    if (!autoEnabled()) return;
+    var sig = mirrorSignature();
+    if (sig !== lastSig && Date.now() - lastAutoAt >= AUTO_EVERY_MS && sig !== 0) {
+      makeBackup({ auto: true });
+    }
+  });
+
+  /* ---------- lazy IndexedDB junk purge (post-boot only) ----------
+     removes any non-file-node junk the save-sync may have imported in older
+     builds; guarded so it runs at most once per storage generation. */
+  var idbPurgeDone = false;
+  function purgeIdbJunk() {
+    if (idbPurgeDone) return;
+    idbPurgeDone = true;
+    try {
+      var req = indexedDB.open("/_savedata");
+      req.onsuccess = function (e) {
+        var db = e.target.result;
+        try {
+          var tx = db.transaction(["FILE_DATA"], "readwrite");
+          var st = tx.objectStore("FILE_DATA");
+          var cur = st.openCursor(), junk = [];
+          cur.onsuccess = function (ev) {
+            var c = ev.target.result;
+            if (!c) { for (var d = 0; d < junk.length; d++) st.delete(junk[d]); db.close(); return; }
+            if (typeof c.value !== "object" || c.value === null || !c.value.timestamp) {
+              if (String(c.key).indexOf(":") >= 0 || String(c.key).indexOf("backup") >= 0) junk.push(c.key);
+            }
+            c.continue();
+          };
+        } catch (er) { try { db.close(); } catch (e2) {} }
+      };
+    } catch (e2) {}
   }
 
   /* ---------- overlay ---------- */
@@ -1410,7 +1608,6 @@ function notify_config_change() {
     if (overlay) return;
     var box = document.createElement("div");
     box.id = "utBackupOverlay";
-
     var star = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     star.setAttribute("viewBox", "0 0 24 24");
     star.setAttribute("width", "26");
@@ -1421,21 +1618,16 @@ function notify_config_change() {
     path.setAttribute("d", "M12 0 L14.8 9.2 L24 12 L14.8 14.8 L12 24 L9.2 14.8 L0 12 L9.2 9.2 Z");
     path.setAttribute("fill", "#fff200");
     star.appendChild(path);
-
     titleEl = document.createElement("div");
     titleEl.className = "utb-title";
-
     flavorEl = document.createElement("div");
     flavorEl.className = "utb-flavor";
-
     metaEl = document.createElement("div");
     metaEl.className = "utb-meta";
-
     box.appendChild(star);
     box.appendChild(titleEl);
     box.appendChild(flavorEl);
     box.appendChild(metaEl);
-
     var style = document.createElement("style");
     style.textContent =
       "#utBackupOverlay{position:fixed;left:50%;bottom:14vh;transform:translate(-50%,0);" +
@@ -1450,7 +1642,6 @@ function notify_config_change() {
       "#utBackupOverlay .utb-meta{font-size:11px;color:#9c9c9c;margin-top:8px;letter-spacing:1px;}" +
       "@keyframes utb-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}" +
       "@media (prefers-reduced-motion:reduce){#utBackupOverlay .utb-star{animation:none;}}";
-
     document.head.appendChild(style);
     document.body.appendChild(box);
     overlay = box;
@@ -1460,6 +1651,16 @@ function notify_config_change() {
     if (n < 1024) return n + " B";
     if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
     return (n / 1048576).toFixed(1) + " MB";
+  }
+
+  function metaLine(m) {
+    if (!m) return "";
+    var parts = [];
+    parts.push(m.route || "?");
+    if (m.boss) parts.push(m.boss);
+    parts.push("LV " + (m.lv || 1));
+    if (m.area) parts.push(m.area);
+    return parts.join("  \u00b7  ");
   }
 
   function showOverlay(result) {
@@ -1476,9 +1677,9 @@ function notify_config_change() {
     } else {
       title = "BACKUP SAVED";
       line = pick(FLAVOR_SAVED);
-      meta = "slot " + result.slot + "/" + MAX_BACKUPS + "  ·  " +
-             new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) +
-             "  ·  " + fmtBytes(result.bytes);
+      meta = metaLine(result.meta) + "  \u00b7  " +
+             new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
+             "  \u00b7  " + fmtBytes(result.bytes);
     }
     titleEl.textContent = title;
     flavorEl.textContent = "* " + line;
@@ -1501,64 +1702,46 @@ function notify_config_change() {
   function fullscreenElement() {
     return document.fullscreenElement || document.webkitFullscreenElement || null;
   }
-
   function lockReservedKeys() {
     try {
       if (navigator.keyboard && navigator.keyboard.lock) {
         var p = navigator.keyboard.lock(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "KeyE"]);
         if (p && p.catch) p.catch(function () {});
       }
-    } catch (e) { /* not supported - the plain listener still tries */ }
-  }
-
-  function unlockReservedKeys() {
-    try {
-      if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock();
     } catch (e) {}
   }
-
+  function unlockReservedKeys() {
+    try { if (navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock(); }
+    catch (e) {}
+  }
   function toggleFullscreen() {
     var el = document.documentElement;
     if (fullscreenElement()) {
       if (document.exitFullscreen) {
         var p = document.exitFullscreen();
         if (p && p.catch) p.catch(function () {});
-      } else if (document.webkitExitFullscreen) {
-        document.webkitExitFullscreen();
-      }
+      } else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
       return;
     }
     try {
       var r;
-      if (el.requestFullscreen) {
-        r = el.requestFullscreen();
-      } else if (el.webkitRequestFullscreen) {
-        r = el.webkitRequestFullscreen();
-      }
+      if (el.requestFullscreen) r = el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) r = el.webkitRequestFullscreen();
       if (r && r.then) r.then(lockReservedKeys).catch(function () {});
       else lockReservedKeys();
-    } catch (e) { /* fullscreen refused (no user gesture etc.) - ignore */ }
+    } catch (e) {}
   }
-
-  document.addEventListener("fullscreenchange", function () {
-    if (!fullscreenElement()) unlockReservedKeys();
-  });
-  document.addEventListener("webkitfullscreenchange", function () {
-    if (!fullscreenElement()) unlockReservedKeys();
-  });
+  document.addEventListener("fullscreenchange", function () { if (!fullscreenElement()) unlockReservedKeys(); });
+  document.addEventListener("webkitfullscreenchange", function () { if (!fullscreenElement()) unlockReservedKeys(); });
 
   /* ---------- keys ---------- */
   window.addEventListener("keydown", function (e) {
     if (e.repeat) return;
-
-    /* F4 - fullscreen, same key as the official PC release */
     if (e.key === "F4" || e.code === "F4") {
       e.preventDefault();
       toggleFullscreen();
       return;
     }
-
-    /* Shift+Ctrl+E - Determination Backup */
     var isE = e.code === "KeyE" || (typeof e.key === "string" && e.key.toLowerCase() === "e");
     if (e.ctrlKey && e.shiftKey && isE) {
       e.preventDefault();
@@ -1571,120 +1754,520 @@ function notify_config_change() {
   /* ---------- console helpers ---------- */
   function listBackups() {
     return backupIds().map(function (id) {
-      var raw = null;
-      try { raw = JSON.parse(localStorage.getItem(BACKUP_PREFIX + id)); } catch (e) {}
+      var r = readRecord(id);
       return {
         id: id,
         when: new Date(id).toLocaleString(),
-        files: raw ? raw.files : "?",
-        bytes: raw ? raw.bytes : "?"
+        files: r ? r.files : "?",
+        bytes: r ? r.bytes : "?",
+        auto: r ? !!r.auto : false,
+        meta: r ? r.meta : null
       };
     });
   }
 
-  function restoreBackup(id) {
-    var raw;
-    try { raw = JSON.parse(localStorage.getItem(BACKUP_PREFIX + id)); }
-    catch (e) { raw = null; }
-    if (!raw || !raw.data) return 0;
-    var n = 0;
-    for (var k in raw.data) {
-      if (!Object.prototype.hasOwnProperty.call(raw.data, k)) continue;
-      localStorage.setItem(k, raw.data[k]);
-      n++;
+  function restoreAndReport(id) {
+    var res = restoreBackup(id);
+    if (res.ok) {
+      console.log("[UndertaleBackups] restored " + res.n + " keys from " + new Date(id).toLocaleString() +
+                  " - reload the page to pick them up.");
     }
-    console.log("[UndertaleBackups] restored " + n + " keys from " + new Date(id).toLocaleString() +
-                " - reload the page to pick them up.");
-    return n;
+    return res;
   }
 
   window.UndertaleBackups = {
     make: triggerBackup,
     list: listBackups,
-    restore: restoreBackup,
+    restore: restoreAndReport,
+    del: deleteBackup,
+    auto: function (on) { if (arguments.length) setAuto(!!on); return autoEnabled(); },
     toggleFullscreen: toggleFullscreen
   };
 })();
-/* [ut-pause:start] ==========================================================
+/* [ut-saveinfo:start] ==========================================================
 
-   PAUSE MENU - built into the game
-   --------------------------------
-   Esc opens the pause menu (windowed mode; in fullscreen the browser keeps
-   Esc for exiting fullscreen - use the menu's own keys there). The menu
-   actually pauses the engine via GM_pause()/GM_unpause() (the same hooks
-   GX Mobile uses), blurs the canvas, and offers:
+   SAVE INFO  --  reads the live save mirror and derives the route state
+   ---------------------------------------------------------
+   The save-sync mirrors GameMaker's virtual file system (IndexedDB /_savedata)
+   into localStorage under "ut/_savedata/<file>". This module parses file0
+   (the main save, 553 lines) and derives:
 
-     RESUME       back to the game
-     FULLSCREEN   same as F4 (entering fullscreen also captures the
-                  Shift+Ctrl+E backup combo via the Keyboard Lock API)
-     BACKUP SAVE  same as Shift+Ctrl+E - one-tap save backup
-     QUIT         back to the loading screen
+     name / LV / HP / gold / EXP / kills
+     murderlv   - exact port of the game's own scr_murderlv (genocide tracker)
+     route      - PACIFIST (kills 0) / NEUTRAL / GENOCIDE (murderlv >= 1)
+     roomName   - from the embedded 342-room table
+     area       - RUINS / SNOWDIN / WATERFALL / HOTLAND / CORE / NEW HOME ...
+     boss       - the checkpoint this save sits at: SANS, UNDYNE THE UNDYING,
+                  ASGORE, METTATON EX / NEO, FLOWEY, PAPYRUS, TORIEL, ASRIEL
 
-   Keyboard: arrows/W-S select, Z/ENTER confirm, X/ESC resume. Mouse clicks
-   and hover work too. While the menu is open, game keys are swallowed so
-   nothing leaks into the paused engine. GX Mobile's window.pause() keeps
-   working unchanged - it now finds real DOM elements instead of nulls.
-
-   ========================================================== [ut-pause:end] */
+   ========================================================== [ut-saveinfo:end] */
 (function () {
   "use strict";
-  if (window.__utPauseInit) return;
-  window.__utPauseInit = true;
+  if (window.UTSaveInfo) return;
 
-  var menu = document.getElementById("pauseMenuContainer");
-  var resumeBtn = document.getElementById("resumeButton");
-  var fullscreenBtn = document.getElementById("fullscreenButton");
-  var backupBtn = document.getElementById("backupButton");
-  var quitBtn = document.getElementById("quitButton");
-  if (!menu || !resumeBtn) return; /* elements not on this page - nothing to do */
+  var ROOMS="room_xbox_engagement|room_start|room_introstory|room_introimage|room_intromenu|room_area1|room_area1_2|room_ruins1|room_ruins2|room_ruins3|room_ruins4|room_ruins5|room_ruins6|room_ruins7|room_ruins7A|room_ruins8|room_ruins9|room_ruins10|room_ruins11|room_ruins12A|room_ruins12|room_ruins12B|room_ruins13|room_ruins14|room_ruins15A|room_ruins15B|room_ruins15C|room_ruins15D|room_ruins15E|room_ruins16|room_ruins17|room_ruins18OLD|room_ruins19|room_torhouse1|room_torhouse2|room_torhouse3|room_torielroom|room_asrielroom|room_kitchen|room_basement1|room_basement2|room_basement3|room_basement4|room_basement5|room_ruinsexit|room_tundra1|room_tundra2|room_tundra3|room_tundra3A|room_tundra4|room_tundra5|room_tundra6|room_tundra6A|room_tundra7|room_tundra8|room_tundra8A|room_tundra9|room_tundra_spaghetti|room_tundra_snowpuzz|room_tundra_xoxosmall|room_tundra_xoxopuzz|room_tundra_randoblock|room_tundra_lesserdog|room_tundra_icehole|room_tundra_iceentrance|room_tundra_iceexit_new|room_tundra_iceexit|room_tundra_poffzone|room_tundra_dangerbridge|room_tundra_town|room_tundra_town2|room_tundra_dock|room_tundra_inn|room_tundra_inn_2f|room_tundra_grillby|room_tundra_library|room_tundra_garage|room_tundra_sanshouse|room_tundra_paproom|room_tundra_sansroom_dark|room_tundra_sansroom|room_tundra_sansbasement|room_fogroom|room_water1|room_water2|room_water3|room_water3A|room_water4|room_water_bridgepuzz1|room_water5|room_water5A|room_water6|room_water7|room_water8|room_water9|room_water_savepoint1|room_water11|room_water_nicecream|room_water12|room_water_shoe|room_water_bird|room_water_onionsan|room_water14|room_water_piano|room_water_dogroom|room_water_statue|room_water_prewaterfall|room_water_waterfall|room_water_waterfall2|room_water_waterfall3|room_water_waterfall4|room_water_preundyne|room_water_undynebridge|room_water_undynebridgeend|room_water_trashzone1|room_water_trashsavepoint|room_water_trashzone2|room_water_friendlyhub|room_water_undyneyard|room_water_undynehouse|room_water_blookyard|room_water_blookhouse|room_water_hapstablook|room_water_farm|room_water_prebird|room_water_shop|room_water_dock|room_water15|room_water16|room_water_temvillage|room_water17|room_water18|room_water19|room_water20|room_water21|room_water_undynefinal|room_water_undynefinal2|room_water_undynefinal3|room_fire1|room_fire2|room_fire_prelab|room_fire_dock|room_fire_lab1|room_fire_lab2|room_fire3|room_fire5|room_fire6|room_fire6A|room_fire_lasers1|room_fire7|room_fire8|room_fire_shootguy_2|room_fire9|room_fire_shootguy_1|room_fire_turn|room_fire_cookingshow|room_fire_savepoint1|room_fire_elevator_r1|room_fire_elevator_r2|room_fire_hotdog|room_fire_walkandbranch|room_fire_sorry|room_fire_apron|room_fire10|room_fire_rpuzzle|room_fire_mewmew2|room_fire_boysnightout|room_fire_newsreport|room_fire_coreview2|room_fire_elevator_l2|room_fire_elevator_l3|room_fire_spidershop|room_fire_walkandbranch2|room_fire_conveyorlaser|room_fire_shootguy_3|room_fire_preshootguy4|room_fire_shootguy_4|room_fire_savepoint2|room_fire_spider|room_fire_pacing|room_fire_operatest|room_fire_multitile|room_fire_hotelfront_1|room_fire_hotelfront_2|room_fire_hotellobby|room_fire_restaurant|room_fire_hoteldoors|room_fire_hotelbed|room_fire_elevator_r3|room_fire_precore|room_fire_core1|room_fire_core2|room_fire_core3|room_fire_core4|room_fire_core5|room_fire_core_freebattle|room_fire_core_laserfun|room_fire_core_branch|room_fire_core_bottomleft|room_fire_core_left|room_fire_core_topleft|room_fire_core_top|room_fire_core_topright|room_fire_core_right|room_fire_core_bottomright|room_fire_core_center|room_fire_shootguy_5|room_fire_core_treasureleft|room_fire_core_treasureright|room_fire_core_warrior|room_fire_core_bridge|room_fire_core_premett|room_fire_core_metttest|room_fire_core_final|room_fire_elevator|room_fire_elevator_l1|room_fire_finalelevator|room_castle_elevatorout|room_castle_precastle|room_castle_hook|room_castle_front|room_asghouse1|room_asghouse2|room_asghouse3|room_asgoreroom|room_asrielroom_final|room_kitchen_final|room_basement1_final|room_basement2_final|room_basement3_final|room_basement4_final|room_lastruins_corridor|room_sanscorridor|room_castle_finalshoehorn|room_castle_coffins1|room_castle_coffins2|room_castle_throneroom|room_castle_prebarrier|room_castle_barrier|room_castle_exit|room_undertale_end|room_castle_trueexit|room_outsideworld|room_fire_labelevator|room_truelab_elevatorinside|room_truelab_elevator|room_truelab_hall1|room_truelab_hub|room_truelab_hall2|room_truelab_operatingroom|room_truelab_redlever|room_truelab_prebed|room_truelab_bedroom|room_truelab_mirror|room_truelab_bluelever|room_truelab_hall3|room_truelab_shower|room_truelab_determination|room_truelab_tv|room_truelab_cooler|room_truelab_greenlever|room_truelab_fan|room_truelab_castle_elevator|room_truelab_prepower|room_truelab_power|room_gaster|room_icecave1|room_ice_dog|room2|room_water_fakehallway|room_mysteryman|room_soundtest|TESTROOM|room_water_redacted|room_water13|room_overworld|room_overworld3|bullettest|room_water16A|room_end_castroll|room_end_highway|room_end_beach|room_end_metta|room_end_school|room_end_mtebott|room_creditsdodger|room_end_myroom|room_end_theend|room_spritecheck|room_settings|room_controltest|room_f_start|room_f_intro|room_f_menu|room_f_room|room_floweyx|room_f_phrase|room_fire4|room_fire10_old|room_fire10A_old|room_tundra_placeholder|room_ruins12B_old|room_tundra_rollsnow|room_water7_older|room_meetundyne_old|room_water_mushroom|room_monsteralign_test|room_battle|room_floweybattle|room_fastbattle|room_storybattle|room_gameover|room_shop1|room_shop2|room_shop3|room_shop4|room_shop5|room_riverman_transition|room_papdate|room_adate|room_flowey_endchoice|room_flowey_regret|room_empty|room_emptywhite|room_emptyblack|room_nothingness|room_undertale|room_of_dog|room_quizholder|room_friendtest|room_bringitinguys|room_asrielappears|room_goodbyeasriel|room_asrielmemory|room_asrieltest|room_afinaltest|room_dogshrine|room_dogshrine_ruined|room_dogshrine_mewmew|room_of_bog|room_dogshrine_xbox|room_decomp_settings".split("|");
 
-  var items = [resumeBtn, fullscreenBtn, backupBtn, quitBtn].filter(Boolean);
-  var sel = 0;
+  /* mirror helpers ------------------------------------------------------- */
+  function decodeMirror(raw) {
+    if (!raw) return null;
+    if (raw.indexOf("JS:") === 0) {
+      try { return JSON.parse(raw.slice(3)); } catch (e) { return null; }
+    }
+    if (raw.indexOf("AB:") === 0) {
+      try {
+        var b64 = raw.slice(3), bin = atob(b64), s = "";
+        for (var i = 0; i < bin.length; i++) s += String.fromCharCode(bin.charCodeAt(i) & 0xff);
+        return s;
+      } catch (e) { return null; }
+    }
+    return null;
+  }
 
-  function isOpen() { return !menu.hidden; }
+  function findFile(name) {
+    var v = localStorage.getItem("ut/_savedata/" + name);
+    if (v !== null) { var d = decodeMirror(v); if (d !== null) return d; }
+    v = localStorage.getItem("ut" + name);
+    if (v !== null) { var d2 = decodeMirror(v); if (d2 !== null) return d2; }
+    return null;
+  }
 
-  function select(i) {
-    sel = ((i % items.length) + items.length) % items.length;
-    for (var j = 0; j < items.length; j++) {
-      items[j].classList.toggle("selected", j === sel);
+  /* exact port of scr_murderlv ------------------------------------------- */
+  function murderlv(f) {
+    function g(i) { return (f && f.length > i) ? (+f[i] || 0) : 0; }
+    var m = 0;
+    if (g(202) === 20) m = 1;
+    if (m >= 1 && g(45) >= 4) m = 2;
+    if (m >= 2 && g(52) >= 1) m = 3;
+    if (m >= 3 && g(53) >= 1) m = 4;
+    if (m >= 4 && g(54) >= 1) m = 5;
+    if (m >= 5 && g(57) >= 2) m = 6;
+    if (m >= 6 && g(203) === 16) m = 7;
+    if (m >= 7 && g(67) >= 1) m = 8;
+    if (m >= 8 && g(81) >= 1) m = 9;
+    if (m >= 9 && g(252) >= 1) m = 10;
+    if (m >= 10 && g(204) === 18) m = 11;
+    if (m >= 11 && g(251) >= 1 && g(350) >= 1) m = 12;
+    if (m >= 12 && g(402) >= 1) m = 13;
+    if (m >= 13 && g(397) >= 1) m = 14;
+    if (m >= 14 && g(205) === 40) m = 15;
+    if (m >= 15 && g(425) >= 1 && g(27) >= 0) m = 16;
+    return m;
+  }
+
+  function areaOf(rn) {
+    if (rn === "room_sanscorridor") return "THE LAST CORRIDOR";
+    if (/^room_ruins|^room_f_intro|^room_basement\d*$/.test(rn)) return "RUINS";
+    if (/^room_tundra|^room_fogroom/.test(rn)) return "SNOWDIN";
+    if (/^room_water/.test(rn)) return "WATERFALL";
+    if (/^room_fire_core/.test(rn)) return "CORE";
+    if (/^room_fire/.test(rn)) return "HOTLAND";
+    if (/^room_castle|^room_lastruins|^room_basement.*_final|^room_asgore|^room_asriel|^room_kitchen|^room_sans/.test(rn)) return "NEW HOME";
+    if (/^room_truelab/.test(rn)) return "TRUE LAB";
+    if (/^room_end/.test(rn)) return "THE END";
+    if (/^room_flowey/.test(rn)) return "???";
+    return "THE UNDERGROUND";
+  }
+
+  function bossOf(info) {
+    var rn = info.roomName, g = info.route === "GENOCIDE";
+    if (rn === "room_sanscorridor") return "SANS";
+    if (g && (rn === "room_water_trashsavepoint" || rn === "room_water_undynebridge" ||
+              rn === "room_water_undynebridgeend" || rn === "room_water_preundyne")) return "UNDYNE THE UNDYING";
+    if (/^room_water_undynefinal/.test(rn)) return "UNDYNE";
+    if (g && (rn === "room_fire_core_warrior" || rn === "room_fire_core_premett")) return "METTATON NEO";
+    if (!g && (rn === "room_fire_core_final" || rn === "room_fire_core_premett")) return "METTATON EX";
+    if (rn === "room_asgoreroom" || rn === "room_castle_prebarrier" || rn === "room_castle_barrier") return "ASGORE";
+    if (rn === "room_floweyx" || rn === "room_floweybattle") return "FLOWEY";
+    if (rn === "room_asrielroom_final") return "ASRIEL";
+    if (rn === "room_fogroom") return "PAPYRUS";
+    if (/^room_basement[45](_final)?$/.test(rn)) return "TORIEL";
+    return null;
+  }
+
+  function parse() {
+    var txt = findFile("file0");
+    if (!txt) return null;
+    var L = txt.replace(/\r/g, "").split("\n");
+    if (L.length < 553) return null;
+    var fl = [];
+    for (var i = 32; i < 545; i++) fl.push(+L[i] || 0);
+    var info = {
+      raw: txt,
+      name: (L[0] || "?").slice(0, 12),
+      lv: +L[1] || 0,
+      maxhp: +L[2] || 0,
+      at: +L[4] || 0,
+      df: +L[6] || 0,
+      xp: +L[9] || 0,
+      gold: +L[10] || 0,
+      kills: +L[11] || 0,
+      weapon: +L[30] || 0,
+      armor: +L[31] || 0,
+      plot: +L[545] || 0,
+      room: +L[551] || 0,
+      time: +L[552] || 0,
+      flags: fl
+    };
+    info.murderlv = murderlv(fl);
+    info.route = info.kills === 0 ? "PACIFIST" : (info.murderlv >= 1 ? "GENOCIDE" : "NEUTRAL");
+    info.roomName = ROOMS[info.room] || ("room " + info.room);
+    info.area = areaOf(info.roomName);
+    info.boss = bossOf(info);
+    info.hp = info.maxhp;
+    return info;
+  }
+
+  window.UTSaveInfo = {
+    parse: parse, murderlv: murderlv, areaOf: areaOf, bossOf: bossOf,
+    decodeMirror: decodeMirror, findFile: findFile, ROOMS: ROOMS
+  };
+})();
+
+/* [ut-pausemenu:start] ==========================================================
+
+   PAUSE MENU  -  built into the game, drawn like the game
+   ---------------------------------------------------------
+   Esc pauses the engine for real (GM_pause) and renders this menu on a
+   640x480 canvas overlay that sits exactly on top of the game canvas - so
+   it shares the game's pixel grid and scale. Everything is drawn with an
+   embedded 5x7 pixel font, the SOUL is the cursor, selected entries turn
+   yellow - the same visual language as the in-game menus.
+
+     RESUME       back to the game
+     SAVE STATES  the backup manager: every state is tagged with its route
+                  (PACIFIST / NEUTRAL / GENOCIDE) and boss checkpoint
+                  (SANS, UNDYNE THE UNDYING, ASGORE, ...). Filter by route,
+                  make states, restore, delete, toggle AUTO-BACKUP.
+     FULLSCREEN   same as F4
+     QUIT         back to the loading screen
+
+   Keyboard: arrows (or WASD) select, Z/ENTER confirm, X/ESC back. Mouse
+   works too. While open, game keys are swallowed. GX Mobile's window.pause()
+   opens the same menu.
+
+   ========================================================== [ut-pausemenu:end] */
+(function () {
+  "use strict";
+  if (window.__utMenuInit) return;
+  window.__utMenuInit = true;
+
+  /* 5x7 pixel font (rows are 5-bit masks, MSB = leftmost pixel) */
+  var FONT = {32:[0,0,0,0,0,0,0],33:[28,28,28,28,28,0,28],34:[30,22,22,22,22,22,22],35:[2,0,30,8,30,0,0],36:[12,14,24,14,2,30,12],37:[26,20,28,4,6,15,22],38:[12,14,12,26,22,22,30],39:[28,28,28,28,28,28,28],40:[7,14,28,28,28,14,7],41:[14,7,3,3,3,7,14],42:[12,12,30,30,12,14,22],43:[4,4,4,31,4,4,4],44:[15,15,31,31,28,28,28],45:[31,31,31,31,31,31,31],46:[28,28,28,28,28,28,28],47:[1,2,2,4,4,8,8],48:[14,9,25,29,25,9,14],49:[6,14,6,6,6,6,15],50:[14,9,3,2,4,8,31],51:[14,9,3,6,1,25,14],52:[2,6,10,10,31,2,2],53:[15,8,14,1,1,25,14],54:[15,8,14,25,9,9,14],55:[15,2,2,6,4,4,4],56:[14,9,11,14,25,25,14],57:[14,11,25,9,15,3,14],58:[30,24,0,0,0,24,30],59:[14,0,0,0,14,14,28],60:[3,7,12,24,12,7,3],61:[31,15,0,0,0,15,31],62:[24,14,7,1,7,14,24],63:[14,25,3,6,4,0,4],64:[14,26,30,26,30,16,12],65:[12,12,14,10,30,18,19],66:[30,26,26,30,26,26,30],67:[14,9,24,24,24,9,14],68:[30,27,25,25,25,27,30],69:[31,24,24,31,24,24,31],70:[15,8,8,15,8,8,8],71:[14,9,24,27,25,9,15],72:[25,25,25,31,25,25,25],73:[15,4,4,4,4,4,15],74:[7,3,3,3,3,10,14],75:[26,30,28,28,30,26,27],76:[16,16,16,16,16,16,31],77:[27,27,31,31,21,17,17],78:[25,25,29,29,27,27,27],79:[14,11,25,25,25,11,14],80:[31,25,25,30,24,24,24],81:[14,25,25,25,11,6,3],82:[30,26,26,30,30,26,26],83:[14,25,8,14,1,25,15],84:[30,12,12,12,12,12,12],85:[25,25,25,25,25,9,14],86:[19,18,26,10,14,12,12],87:[19,19,30,30,30,30,26],88:[26,14,12,12,12,10,18],89:[18,10,14,12,12,12,12],90:[30,6,4,12,8,24,30],91:[14,12,12,12,12,12,14],92:[8,8,4,4,2,2,1],93:[31,3,3,3,3,3,31],94:[6,6,14,14,10,11,9],95:[15,15,15,15,15,15,15],96:[14,14,14,6,7,3,3],123:[15,12,12,24,12,12,15],124:[28,28,28,28,28,28,28],125:[12,4,6,2,4,4,12],126:[28,28,12,15,3,3,3]};
+  var HEART = [0x18c,0x3de,0x7ff,0x7ff,0x7ff,0x3fe,0x1fc,0xf8,0x70,0x20];   /* 11x10 SOUL, row masks */
+
+  var W = 640, H = 480;
+  var canvas = null, ctx = null, raf = -1;
+
+  var S = {
+    open: false, mode: "main",       /* main | states | confirm */
+    sel: 0, tab: 0, scroll: 0,
+    confirm: null,                   /* {kind, id, yes} */
+    slots: [], info: null, tick: 0
+  };
+  var TABS = ["ALL", "PACIFIST", "NEUTRAL", "GENOCIDE"];
+
+  /* ---------- canvas plumbing ---------- */
+  function gameCanvas() {
+    return document.querySelector("canvas.emscripten") || document.getElementById("canvas");
+  }
+  function ensureCanvas() {
+    if (canvas) return true;
+    var gc = gameCanvas();
+    if (!gc) return false;
+    canvas = document.createElement("canvas");
+    canvas.id = "utPauseMenu";
+    canvas.width = W;
+    canvas.height = H;
+    canvas.style.cssText =
+      "position:fixed;z-index:99998;image-rendering:pixelated;image-rendering:crisp-edges;" +
+      "background:transparent;cursor:default;";
+    document.body.appendChild(canvas);
+    ctx = canvas.getContext("2d");
+    if (ctx) ctx.imageSmoothingEnabled = false;
+    return true;
+  }
+  function placeCanvas() {
+    if (!canvas) return;
+    var gc = gameCanvas();
+    var r = gc ? gc.getBoundingClientRect() : { left: 0, top: 0, width: innerWidth, height: innerHeight };
+    canvas.style.left = r.left + "px";
+    canvas.style.top = r.top + "px";
+    canvas.style.width = r.width + "px";
+    canvas.style.height = r.height + "px";
+  }
+  /* ---------- pixel drawing ---------- */
+  function px(x, y, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+  }
+  function text(str, x, y, scale, color) {
+    str = String(str).toUpperCase();
+    ctx.fillStyle = color;
+    for (var i = 0; i < str.length; i++) {
+      var g = FONT[str.charCodeAt(i)];
+      if (!g) g = FONT[63]; /* '?' */
+      for (var r = 0; r < 7; r++) {
+        var row = g[r];
+        if (!row) continue;
+        for (var c = 0; c < 5; c++) {
+          if (row & (1 << (4 - c))) {
+            ctx.fillRect(x + (i * 6 + c) * scale, y + r * scale, scale, scale);
+          }
+        }
+      }
+    }
+  }
+  function textW(str, scale) { return String(str).length * 6 * scale - scale; }
+  function heart(x, y, scale, color) {
+    ctx.fillStyle = color;
+    for (var r = 0; r < HEART.length; r++) {
+      var row = HEART[r];
+      for (var c = 0; c < 11; c++) {
+        if (row & (1 << (10 - c))) ctx.fillRect(x + c * scale, y + r * scale, scale, scale);
+      }
+    }
+  }
+  function box(x, y, w, h) {
+    px(x, y, w, h, "#fff");            /* white frame      */
+    px(x + 5, y + 5, w - 10, h - 10, "#000"); /* black interior */
+  }
+
+  var COL = { txt: "#ffffff", sel: "#fff200", hint: "#7f7f7f", red: "#ff0000",
+              pac: "#00c0ff", neu: "#ffffff", gen: "#ff4040", auto: "#00ff00" };
+
+  function routeColor(route) {
+    return route === "PACIFIST" ? COL.pac : route === "GENOCIDE" ? COL.gen : COL.neu;
+  }
+
+  /* ---------- data ---------- */
+  function refresh() {
+    S.info = window.UTSaveInfo ? window.UTSaveInfo.parse() : null;
+    var all = window.UndertaleBackups ? window.UndertaleBackups.list() : [];
+    var f = TABS[S.tab];
+    S.slots = f === "ALL" ? all : all.filter(function (s) { return s.meta && s.meta.route === f; });
+    if (S.sel > Math.max(0, S.slots.length)) S.sel = Math.max(0, S.slots.length);
+  }
+
+  /* ---------- layout helpers ---------- */
+  var rows = [];   /* hit-test rows: {x,y,w,h,act,sel} rebuilt every frame */
+
+  function menuRow(x, y, label, selected, color, heartOn) {
+    var s = 2;
+    var w = textW(label, s) + 30;
+    if (heartOn) heart(x + 2, y + 3, 2, COL.red);
+    text(label, x + 32, y, s, color || (selected ? COL.sel : COL.txt));
+    rows.push({ x: x, y: y - 4, w: w + 40, h: 20, act: label, sel: selected });
+    return y + 22;
+  }
+
+  function confirmBox(title, sub) {
+    box(140, 170, 360, 130);
+    text(title, 320 - textW(title, 2) / 2, 190, 2, COL.txt);
+    if (sub) text(sub, 320 - textW(sub, 1) / 2, 216, 1, COL.hint);
+    var y = 244;
+    var opts = ["YES", "NO"];
+    S.confirm.yesPos = [];
+    for (var i = 0; i < opts.length; i++) {
+      var x = 245 + i * 90;
+      var on = (S.confirm.yes ? i === 0 : i === 1);
+      if (on) heart(x - 4, y + 2, 2, COL.red);
+      text(opts[i], x + 14, y, 2, on ? COL.sel : COL.txt);
+      rows.push({ x: x - 10, y: y - 6, w: 80, h: 24, act: "confirm" + i, sel: on });
     }
   }
 
-  function openMenu() {
-    if (isOpen()) return;
-    pause();                 /* GM_pause + show menu + blur canvas (shared with GX Mobile) */
-    select(0);
-  }
-
-  function closeMenu() {
-    if (!isOpen()) return;
-    resume();                /* GM_unpause + hide menu + unblur (shared with GX Mobile) */
-  }
-
-  function toggleMenu() {
-    if (isOpen()) closeMenu(); else openMenu();
-  }
-
-  /* ---------- button actions ---------- */
-  resumeBtn.addEventListener("click", closeMenu);
-  if (fullscreenBtn) fullscreenBtn.addEventListener("click", function () {
-    if (window.UndertaleBackups && window.UndertaleBackups.toggleFullscreen) {
-      window.UndertaleBackups.toggleFullscreen();
+  /* ---------- draw ---------- */
+  function drawMain() {
+    var info = S.info;
+    /* stats strip (like the in-game menu header) */
+    if (info) {
+      text(info.name, 36, 24, 2, COL.txt);
+      text("LV " + info.lv, 36 + textW(info.name, 2) + 24, 24, 2, COL.txt);
+      var hp = "HP " + info.hp + "/" + info.maxhp;
+      text(hp, 36 + textW(info.name, 2) + textW("LV " + info.lv, 2) + 48, 24, 2, COL.txt);
+      var badge = info.route;
+      var bx = W - 36 - textW(badge, 2);
+      text(badge, bx, 24, 2, routeColor(info.route));
+      var loc = (info.boss ? info.boss + "  -  " : "") + info.area;
+      text(loc, 36, 46, 1, COL.hint);
     }
-  });
-  if (backupBtn) backupBtn.addEventListener("click", function () {
+
+    box(32, 84, 576, 262);
+    text("PAUSED", 320 - textW("PAUSED", 3) / 2, 108, 3, COL.txt);
+
+    var items = ["RESUME", "SAVE STATES", "FULLSCREEN", "QUIT"];
+    var y = 158;
+    for (var i = 0; i < items.length; i++) {
+      y = menuRow(84, y, items[i], S.sel === i) + 8;
+    }
+    text("\u2191\u2193 SELECT   Z CONFIRM   X RESUME", 320 - textW("\u2191\u2193 SELECT   Z CONFIRM   X RESUME", 1) / 2, 368, 1, COL.hint);
+  }
+
+  function drawStates() {
+    var info = S.info;
+    text("SAVE STATES", 36, 20, 2, COL.txt);
+
+    /* route filter tabs */
+    var tx = 36;
+    for (var t = 0; t < TABS.length; t++) {
+      var on = S.tab === t;
+      var tw = textW(TABS[t], on ? 2 : 1);
+      text(TABS[t], tx, 42, on ? 2 : 1, on ? COL.sel : COL.hint);
+      tx += tw + 26;
+    }
+    var autoOn = window.UndertaleBackups ? window.UndertaleBackups.auto() : false;
+    var at = "AUTO " + (autoOn ? "ON" : "OFF");
+    text(at, W - 36 - textW(at, 1), 46, 1, autoOn ? COL.auto : COL.hint);
+    text("(ENTER TOGGLES)", W - 36 - textW("(ENTER TOGGLES)", 1), 58, 1, COL.hint);
+
+    box(32, 74, 576, 330);
+
+    /* NEW STATE row */
+    var y = 92;
+    y = menuRow(60, y, "NEW SAVE STATE", S.sel === 0, S.sel === 0 ? COL.sel : COL.txt, true) + 6;
+
+    /* slot rows */
+    var visible = Math.min(S.slots.length, 8);
+    if (S.scroll > S.slots.length - visible) S.scroll = Math.max(0, S.slots.length - visible);
+    var idx;
+    for (var r = 0; r < visible; r++) {
+      idx = S.scroll + r;
+      var s = S.slots[idx];
+      if (!s) break;
+      var sel = S.sel === idx + 1;
+      if (sel) heart(62, y + 3, 2, COL.red);
+      var meta = s.meta || {};
+      var rc = routeColor(meta.route);
+      text((meta.route || "?").slice(0, 3), 92, y, 2, rc);
+      var lx = 92 + textW("GEN", 2) + 14;
+      var bossTxt = meta.boss || meta.area || "SAVE";
+      text(bossTxt.slice(0, 18), lx, y, 2, sel ? COL.sel : COL.txt);
+      var lvTxt = "LV" + (meta.lv || 1);
+      text(lvTxt, 340, y, 2, sel ? COL.sel : COL.txt);
+      var tTxt = new Date(s.id).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      text(tTxt, 400, y, 2, sel ? COL.sel : COL.hint);
+      if (s.auto) text("AUTO", 470, y, 2, COL.auto);
+      rows.push({ x: 56, y: y - 4, w: 440, h: 20, act: "slot" + idx, sel: sel });
+      y += 22;
+    }
+    if (S.slots.length === 0) {
+      text("NO STATES YET - PRESS Z TO MAKE ONE", 320 - textW("NO STATES YET - PRESS Z TO MAKE ONE", 1) / 2, 200, 1, COL.hint);
+    }
+    if (S.slots.length > 8) {
+      var sc = "MORE " + (S.slots.length - 8);
+      text(sc, 320 - textW(sc, 1) / 2, 372, 1, COL.hint);
+    }
+
+    var hint = "\u2190\u2192 ROUTE   \u2191\u2193 SELECT   Z RESTORE   D DELETE   X BACK";
+    text(hint, 320 - textW(hint, 1) / 2, 414, 1, COL.hint);
+    text("SHIFT CTRL E ANYWHERE FOR A QUICK BACKUP", 320 - textW("SHIFT CTRL E ANYWHERE FOR A QUICK BACKUP", 1) / 2, 428, 1, COL.hint);
+  }
+
+  function drawConfirm() {
+    var c = S.confirm;
+    if (c.kind === "restore") {
+      var m = c.meta || {};
+      var t = "RESTORE THIS SAVE STATE?";
+      var sub = (m.route || "?") + (m.boss ? " - " + m.boss : "") + "  LV" + (m.lv || 1) +
+                "  " + new Date(c.id).toLocaleString();
+      confirmBox(t, sub);
+    } else {
+      confirmBox("DELETE THIS SAVE STATE?", new Date(c.id).toLocaleString());
+    }
+    var hint = "Z CONFIRM   X CANCEL";
+    text(hint, 320 - textW(hint, 1) / 2, 320, 1, COL.hint);
+  }
+
+  function draw() {
+    if (!ctx) return;
+    rows = [];
+    S.tick++;
+    ctx.clearRect(0, 0, W, H);
+    /* dim the frozen game behind us, exactly like the game fades dialogs */
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, W, H);
+    if (S.mode === "main") drawMain();
+    else if (S.mode === "states") drawStates();
+    else drawConfirm();
+  }
+
+  function loop() {
+    if (!S.open) return;
+    placeCanvas();
+    draw();
+    raf = requestAnimationFrame(loop);
+  }
+
+  /* ---------- actions ---------- */
+  function makeState() {
     if (window.UndertaleBackups) window.UndertaleBackups.make();
-  });
-  if (quitBtn) quitBtn.addEventListener("click", function () {
-    menu.hidden = true;
-    quitIfSupported();
-  });
-  items.forEach(function (b, i) {
-    b.addEventListener("mouseenter", function () { select(i); });
-    b.addEventListener("click", function () { select(i); });
-  });
+    refresh();
+  }
+  function doRestore() {
+    var res = window.UndertaleBackups.restore(S.confirm.id);
+    if (res && res.ok) {
+      close();
+      /* reload only after the IndexedDB writes settle - reloading sooner
+         kills the transactions and the save-sync then drops the mirror */
+      var go = function () { setTimeout(function () { window.location.reload(); }, 60); };
+      if (res.idb && typeof res.idb.then === "function") res.idb.then(go, go);
+      else go();
+    }
+  }
+  function doDelete() {
+    window.UndertaleBackups.del(S.confirm.id);
+    S.confirm = null;
+    S.mode = "states";
+    refresh();
+  }
 
-  /* ---------- keyboard ---------- */
+  function confirmSel(i) {
+    S.confirm.yes = i === 0;
+  }
+  function confirmGo() {
+    if (S.confirm.yes) {
+      if (S.confirm.kind === "restore") doRestore();
+      else doDelete();
+    } else {
+      S.confirm = null;
+      S.mode = "states";
+    }
+  }
+
+  /* ---------- input ---------- */
+  function mainAction(i) {
+    if (i === 0) close();
+    else if (i === 1) { S.mode = "states"; S.sel = 0; S.scroll = 0; refresh(); }
+    else if (i === 2) { if (window.UndertaleBackups) window.UndertaleBackups.toggleFullscreen(); }
+    else if (i === 3) {
+      S.confirm = { kind: "quit", id: 0, yes: false };
+      S.mode = "confirm";
+    }
+  }
+
+  function statesUp() {
+    S.sel = Math.max(0, S.sel - 1);
+    if (S.sel < S.scroll) S.scroll = S.sel;
+  }
+  function statesDown() {
+    S.sel = Math.min(S.slots.length, S.sel + 1);
+    if (S.sel > S.scroll + 7) S.scroll = S.sel - 7;
+  }
+  function statesGo() {
+    if (S.sel === 0) { makeState(); return; }
+    var s = S.slots[S.sel - 1];
+    if (!s) return;
+    S.confirm = { kind: "restore", id: s.id, meta: s.meta, yes: true };
+    S.mode = "confirm";
+  }
+  function statesDelete() {
+    if (S.sel === 0) return;
+    var s = S.slots[S.sel - 1];
+    if (!s) return;
+    S.confirm = { kind: "delete", id: s.id, meta: s.meta, yes: false };
+    S.mode = "confirm";
+  }
+
   var GAME_KEYS = {
     ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1,
     Enter: 1, z: 1, Z: 1, x: 1, X: 1, c: 1, C: 1,
@@ -1692,41 +2275,145 @@ function notify_config_change() {
     " ": 1, Shift: 1, Control: 1, Tab: 1
   };
 
-  window.addEventListener("keydown", function (e) {
-    if (e.repeat) { if (isOpen()) e.preventDefault(); return; }
-
-    if (!isOpen()) {
-      /* Esc opens the menu - but not while the browser uses Esc to leave fullscreen */
+  function onKey(e) {
+    if (e.repeat) { if (S.open) e.preventDefault(); return; }
+    if (!S.open) {
       if (e.key === "Escape" && !fullscreenElementActive()) {
         e.preventDefault();
-        openMenu();
+        open();
       }
       return;
     }
-
-    /* menu open: navigate, confirm, resume - and swallow game keys */
     var k = e.key;
-    if (k === "ArrowUp" || k === "w" || k === "W") {
-      e.preventDefault(); e.stopPropagation(); select(sel - 1);
-    } else if (k === "ArrowDown" || k === "s" || k === "S") {
-      e.preventDefault(); e.stopPropagation(); select(sel + 1);
-    } else if (k === "Enter" || k === "z" || k === "Z" || k === " ") {
-      e.preventDefault(); e.stopPropagation(); items[sel].click();
-    } else if (k === "Escape" || k === "x" || k === "X") {
-      e.preventDefault(); e.stopPropagation(); closeMenu();
-    } else if (GAME_KEYS[k]) {
-      e.preventDefault(); e.stopPropagation();
+    var handled = true;
+    if (S.mode === "main") {
+      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 3) % 4;
+      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 4;
+      else if (k === "Enter" || k === "z" || k === "Z" || k === " ") mainAction(S.sel);
+      else if (k === "Escape" || k === "x" || k === "X") close();
+      else handled = false;
+    } else if (S.mode === "states") {
+      if (k === "ArrowUp" || k === "w" || k === "W") statesUp();
+      else if (k === "ArrowDown" || k === "s" || k === "S") statesDown();
+      else if (k === "ArrowLeft" || k === "a" || k === "A") { S.tab = (S.tab + TABS.length - 1) % TABS.length; S.sel = 0; S.scroll = 0; refresh(); }
+      else if (k === "ArrowRight" || k === "d" || k === "D") {
+        if (S.sel > 0) statesDelete();       /* D on a slot = delete */
+        else { S.tab = (S.tab + 1) % TABS.length; S.sel = 0; S.scroll = 0; refresh(); }
+      }
+      else if (k === "Enter") {
+        if (S.sel === 0 && e.shiftKey === false && (e.ctrlKey || e.altKey)) {
+          /* reserved - ignore */
+        } else if (S.sel === 0) {
+          /* Enter on the header row toggles auto-backup */
+          if (window.UndertaleBackups) window.UndertaleBackups.auto(!window.UndertaleBackups.auto());
+        } else statesGo();
+      }
+      else if (k === "z" || k === "Z" || k === " ") {
+        if (S.sel === 0) {
+          if (window.UndertaleBackups) window.UndertaleBackups.auto(!window.UndertaleBackups.auto());
+        } else statesGo();
+      }
+      else if (k === "Escape" || k === "x" || k === "X") { S.mode = "main"; S.sel = 1; }
+      else handled = false;
+    } else {  /* confirm */
+      if (k === "ArrowLeft" || k === "a" || k === "A") confirmSel(0);
+      else if (k === "ArrowRight" || k === "d" || k === "D") confirmSel(1);
+      else if (k === "Enter" || k === "z" || k === "Z" || k === " ") confirmGo();
+      else if (k === "Escape" || k === "x" || k === "X") {
+        if (S.confirm.kind === "quit") { S.confirm = null; S.mode = "main"; }
+        else { S.confirm = null; S.mode = "states"; }
+      }
+      else handled = false;
     }
-  }, true);
+    if (handled || GAME_KEYS[k]) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    }
+  }
 
   function fullscreenElementActive() {
     return !!(document.fullscreenElement || document.webkitFullscreenElement);
   }
 
-  /* keep menu state sane if the page somehow loses focus mid-menu */
-  window.addEventListener("blur", function () {
-    if (isOpen()) closeMenu();
-  });
+  /* ---------- mouse ---------- */
+  function onMouse(e) {
+    if (!S.open || !canvas) return;
+    var r = canvas.getBoundingClientRect();
+    var x = (e.clientX - r.left) * W / r.width;
+    var y = (e.clientY - r.top) * H / r.height;
+    if (e.type === "mousemove") {
+      for (var i = 0; i < rows.length; i++) {
+        var w = rows[i];
+        if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) {
+          if (S.mode === "main") S.sel = i;
+          else if (S.mode === "states") {
+            if (w.act === "NEW SAVE STATE") S.sel = 0;
+            else if (w.act.indexOf("slot") === 0) S.sel = Number(w.act.slice(4)) + 1;
+          } else if (S.mode === "confirm" && w.act.indexOf("confirm") === 0) {
+            confirmSel(Number(w.act.slice(7)));
+          }
+          break;
+        }
+      }
+    } else if (e.type === "click") {
+      for (var j = 0; j < rows.length; j++) {
+        var t = rows[j];
+        if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) {
+          if (S.mode === "main") { S.sel = j; mainAction(j); }
+          else if (S.mode === "states") {
+            if (t.act === "NEW SAVE STATE") { S.sel = 0; makeState(); }
+            else if (t.act.indexOf("slot") === 0) {
+              S.sel = Number(t.act.slice(4)) + 1;
+              statesGo();
+            }
+          } else if (S.mode === "confirm" && t.act.indexOf("confirm") === 0) {
+            confirmSel(Number(t.act.slice(7)));
+            confirmGo();
+          }
+          break;
+        }
+      }
+    }
+  }
 
-  window.togglePauseMenu = toggleMenu;
+  /* ---------- open/close ---------- */
+  function open() {
+    if (S.open) return;
+    if (!ensureCanvas()) return;
+    attachLazy();
+    refresh();
+    S.open = true;
+    S.mode = "main";
+    S.sel = 0;
+    canvas.style.display = "block";
+    cancelAnimationFrame(raf);
+    loop();
+    if (typeof window.__utPauseHook === "function") window.__utPauseHook();
+  }
+  function close() {
+    if (!S.open) return;
+    S.open = false;
+    cancelAnimationFrame(raf);
+    if (canvas) canvas.style.display = "none";
+    if (typeof window.__utResumeHook === "function") window.__utResumeHook();
+  }
+  function isOpen() { return S.open; }
+
+  /* listeners: the keydown stays live (opens the menu) but the mouse/blur
+     listeners are only attached while the menu is open - the runner's boot
+     is timing-sensitive and every extra capture listener counts */
+  window.addEventListener("keydown", onKey, true);
+  var lazyAttached = false;
+  function attachLazy() {
+    if (lazyAttached) return;
+    lazyAttached = true;
+    window.addEventListener("mousemove", onMouse, true);
+    window.addEventListener("click", onMouse, true);
+    window.addEventListener("resize", placeCanvas);
+    window.addEventListener("blur", function () { if (S.open) close(); });
+  }
+
+  window.UTPauseMenu = { open: open, close: close, isOpen: isOpen, toggle: function () { S.open ? close() : open(); } };
+  window.togglePauseMenu = window.UTPauseMenu.toggle;
 })();

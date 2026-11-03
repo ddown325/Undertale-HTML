@@ -16970,4 +16970,7 @@
   "xbox_controller_connect_4": "No Controlly is Cannoli",
   "xbox_controller_connect_5": "No head is connected.\nNo body is connected.\nNo arms are connected.\nNo legs are connected.\nNo skin is connected.\nNo ears are connected.\nNo face is connected\nNo mouth is connected.\nNo heart is connected.\nNo teeth are connected.\nNo heart is connected.",
   "xbox_controller_connect_6": "You were excited about dating\na very handsome skeleton and\npulled the controller out by\naccident. I understand."
+,
+  "item_use_setbonus_heal": "* Set bonus^1!&* Items heal +\\[1\\] HP./",
+  "item_use_setbonus_inv": "* Set bonus^1!&* INV +\\[1\\]/"
 }
