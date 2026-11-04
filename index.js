@@ -112,11 +112,137 @@
     return { timestamp: new Date(), mode: 33206, contents: value };
   }
 
+  /* [ut-savedata-healer] v1.8 - keep in sync with the inline copy in
+     index.html (the canonical one; this fallback copy only runs in
+     exotic embeds that load index.js standalone). See index.html for
+     the full rationale: undertale.sav's JSON map is validated and
+     repaired at gameStorage.get() so a short/missing file0 or a missing
+     undertale.ini can never reach scr_load's fatal file reads. */
+  function __utNodeText(node) {
+    var c = node && node.contents;
+    if (c == null) return "";
+    if (typeof c === "string") return c;
+    if (c instanceof Uint8Array || c instanceof ArrayBuffer) {
+      try {
+        return new TextDecoder("utf-8").decode(c instanceof Uint8Array ? c : new Uint8Array(c));
+      } catch (e) { return ""; }
+    }
+    return String(c);
+  }
+  function __utFixFile0(txt) {
+    if (typeof txt !== "string" || !txt) return null;
+    var t = txt.replace(/\r\n?/g, "\n");
+    if (t.charAt(t.length - 1) !== "\n") t += "\n";
+    var L = t.split("\n");
+    while (L.length && L[L.length - 1] === "") L.pop();
+    if (L.length === 0) return null;
+    for (var i = 0; i < 549; i++) {
+      if (L[i] === undefined || L[i] === "") L[i] = "0";
+    }
+    L.length = 549;
+    var out = "";
+    for (var n = 0; n < 549; n++) out += L[n] + "\n";
+    return out;
+  }
+  function __utSynthIni(txt) {
+    var L = String(txt).replace(/\r\n?/g, "\n").split("\n");
+    var g = function (i, d) { var v = (L[i] !== undefined) ? String(L[i]).replace(/^\s+|\s+$/g, "") : ""; return v || d; };
+    return "[General]\nName=" + g(0, "FRISK") + "\nLove=" + g(1, "1") +
+      "\nTime=" + g(548, "0") + "\nKills=" + g(11, "0") + "\nRoom=" + g(547, "5") + "\n";
+  }
+  function __utIniOk(txt) {
+    return typeof txt === "string" && /^\s*\[General\]/i.test(txt);
+  }
+  function __utHealSavNode(node) {
+    var txt = __utNodeText(node);
+    if (txt.charCodeAt(txt.length - 1) === 0) txt = txt.slice(0, -1);
+    var map, dead = false;
+    try { map = JSON.parse(txt); } catch (e) { map = null; }
+    if (!map || typeof map !== "object") { map = {}; dead = true; }
+    var changed = dead;
+    var f0 = __utFixFile0(map["file0"]);
+    if (f0 === null) {
+      var mir = null;
+      try { mir = window.oprt.__utGetFSFile && window.oprt.__utGetFSFile("file0"); } catch (e1) {}
+      f0 = __utFixFile0(mir);
+      if (f0 === null) {
+        f0 = "FRISK\n";
+        for (var z = 1; z < 549; z++) f0 += (z === 547 ? "5" : "0") + "\n";
+      }
+    }
+    if (map["file0"] !== f0) { map["file0"] = f0; changed = true; }
+    if (map["file9"] !== undefined && map["file9"] !== null) {
+      var f9 = __utFixFile0(map["file9"]);
+      if (f9 === null) { delete map["file9"]; changed = true; }
+      else if (map["file9"] !== f9) { map["file9"] = f9; changed = true; }
+    }
+    if (!__utIniOk(map["undertale.ini"])) {
+      var iniMir = null;
+      try { iniMir = window.oprt.__utGetFSFile && window.oprt.__utGetFSFile("undertale.ini"); } catch (e3) {}
+      map["undertale.ini"] = __utIniOk(iniMir) ? iniMir : __utSynthIni(f0);
+      changed = true;
+    }
+    if (!changed) return { node: node, changed: false };
+    var out = JSON.stringify(map) + "\u0000";
+    var healed = { timestamp: new Date(), mode: 33206, contents: new TextEncoder().encode(out) };
+    try { console.log("[ut-heal] repaired undertale.sav" + (dead ? " (unparseable JSON - rebuilt)" : "")); } catch (e4) {}
+    return { node: healed, changed: true };
+  }
+  function __utSweepLegacyTimestamps() {
+    if (window.__utSweptTS) return;
+    window.__utSweptTS = true;
+    openDB().then(function (db) {
+      return new Promise(function (resolve) {
+        try {
+          var t = db.transaction(["FILE_DATA"], "readwrite");
+          var st = t.objectStore("FILE_DATA");
+          var fixed = 0;
+          var cur = st.openCursor();
+          cur.onsuccess = function (e) {
+            var c = e.target.result;
+            if (!c) { if (fixed) console.log("[ut-heal] normalized " + fixed + " legacy record timestamp(s)"); db.close(); resolve(); return; }
+            var n = c.value;
+            if (n && typeof n === "object" && !(n.timestamp instanceof Date)) {
+              try {
+                var ts = n.timestamp ? new Date(Number(n.timestamp) || 0) : new Date(0);
+                if (isNaN(ts.getTime())) ts = new Date(0);
+                c.update({ timestamp: ts, mode: (typeof n.mode === "number" ? n.mode : 33206), contents: n.contents });
+                fixed++;
+              } catch (er) {}
+            }
+            c.continue();
+          };
+          cur.onerror = function () { db.close(); resolve(); };
+          t.oncomplete = function () { db.close(); resolve(); };
+        } catch (e) { db.close(); resolve(); }
+      });
+    }).catch(function () {});
+  }
+
+  window.oprt.__utGetFSFile = function (name) {
+    try {
+      var raw = localStorage.getItem("ut/_savedata/" + name);
+      if (raw == null) return null;
+      var leaf = null;
+      if (raw.indexOf("OBJ:") === 0) {
+        try {
+          var nd = JSON.parse(raw.slice(4));
+          leaf = nd && typeof nd === "object" ? nd.contents : null;
+        } catch (e) { return null; }
+      } else leaf = raw;
+      if (typeof leaf !== "string" || leaf.indexOf("AB:") !== 0) return null;
+      var b64 = leaf.slice(3), bin = atob(b64), s = "";
+      for (var i = 0; i < bin.length; i++) s += String.fromCharCode(bin.charCodeAt(i) & 0xff);
+      return s;
+    } catch (e) { return null; }
+  };
+
   window.oprt.gameStorage = {
     open: function (name) {
       if (!window.__gsTrace) window.__gsTrace = [];
       if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);  /* keep it bounded */
       window.__gsTrace.push("open:" + name);
+      __utSweepLegacyTimestamps();
       /* handle contract used by the runner's GXMFS + the WASM save layer:
            list()             -> Promise<{ key: {timestamp: Date, mode} }>
            get(key)           -> Promise<node>
@@ -172,7 +298,20 @@
             var r = st.get(norm(key));
             return { __req: r };
           }).then(function (node) {
-            return node === undefined ? node : saneNode(node);
+            if (node === undefined) return node;
+            var healed = saneNode(node);
+            if (norm(key) === "/_savedata/undertale.sav" && healed) {
+              try {
+                var res = __utHealSavNode(healed);
+                if (res.changed) {
+                  healed = res.node;
+                  tx("readwrite", function (st) {
+                    st.put(healed, norm(key));
+                  }).catch(function () {});
+                }
+              } catch (e) {}
+            }
+            return healed;
           });
         },
         put: function (node, key) {
@@ -1891,7 +2030,9 @@ function notify_config_change() {
     { id: "toriel",   name: "TORIEL",               area: "RUINS EXIT",
       route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 25,
       room: 42,  plot: 24,
-      weapon: 13, armor: 4,  wstrength: 3,  adef: 0,      /* Toy Knife + Bandage */
+      weapon: 13, armor: 12, wstrength: 3,  adef: 3,      /* Toy Knife + Faded Ribbon (v1.8: wiki
+                                                           best-in-slot - and the ATK+2/DF+1 set bonus
+                                                           beats Bandage's no-DF) */
       items: [1, 1, 7, 7, 0, 0, 0, 0],              /* 2x Monster Candy, 2x Spider Donut */
       time: 900, sub: "RUINS - THE EXIT" },
     { id: "papyrus",  name: "PAPYRUS",              area: "SNOWDIN FOREST",
@@ -2111,21 +2252,52 @@ function notify_config_change() {
      trailing NUL (buffer_string). Boss states merge their three entries
      into any existing map (config.ini and other files are preserved). */
   function readSavedataMap() {
-    var txt = window.UTSaveInfo ? window.UTSaveInfo.findFile("undertale.sav") : null;
-    if (typeof txt === "string" && txt.charAt(0) === "{") {
-      var json = txt.charCodeAt(txt.length - 1) === 0 ? txt.slice(0, -1) : txt;
-      try {
-        var m = JSON.parse(json);
-        if (m && typeof m === "object") return m;
-      } catch (e) {}
+    /* v1.8: the DB is the source of truth - the localStorage mirror can be
+       up to 10s stale (the mirror scheduler), and merging boss states on
+       top of a stale map could resurrect old file0/ini entries mid-write.
+       Read the live record through the same gameStorage client the
+       runner uses; fall back to the mirror only if that fails. */
+    function fromMirror() {
+      var txt = window.UTSaveInfo ? window.UTSaveInfo.findFile("undertale.sav") : null;
+      if (typeof txt === "string" && txt.charAt(0) === "{") {
+        var json = txt.charCodeAt(txt.length - 1) === 0 ? txt.slice(0, -1) : txt;
+        try {
+          var m = JSON.parse(json);
+          if (m && typeof m === "object") return m;
+        } catch (e) {}
+      }
+      return null;
     }
-    return {};
+    if (window.oprt && window.oprt.gameStorage) {
+      var st = window.oprt.gameStorage.open("/_savedata");
+      return Promise.resolve(st.get("undertale.sav")).then(function (node) {
+        var txt = null;
+        try {
+          if (node && node.contents) {
+            var c = node.contents;
+            txt = typeof c === "string" ? c : new TextDecoder("utf-8").decode(c);
+          }
+        } catch (e) { txt = null; }
+        if (typeof txt === "string" && txt.charAt(0) === "{") {
+          var json = txt.charCodeAt(txt.length - 1) === 0 ? txt.slice(0, -1) : txt;
+          try {
+            var m2 = JSON.parse(json);
+            if (m2 && typeof m2 === "object") return m2;
+          } catch (e2) {}
+        }
+        return fromMirror() || {};
+      }, function () {
+        return fromMirror() || {};
+      });
+    }
+    return Promise.resolve(fromMirror() || {});
   }
 
   function buildSavedata(entries) {
-    var map = readSavedataMap();
-    for (var k in entries) map[k] = entries[k];
-    return JSON.stringify(map);
+    return Promise.resolve(readSavedataMap()).then(function (map) {
+      for (var k in entries) map[k] = entries[k];
+      return JSON.stringify(map);
+    });
   }
 
   function player() {
@@ -2184,20 +2356,21 @@ function notify_config_change() {
     var keep = stashOldGear(b);
     var file0 = buildFile0(b, name, keep);
     var ini = buildIni(b, name, typeof existingIni === "string" ? existingIni : null);
-    var savJson = buildSavedata({
+    var ts = Date.now();
+    return buildSavedata({
       "file0": file0,
       "file9": file0,               /* temp-save: CONTINUE after death */
       "undertale.ini": ini
-    });
-    var ts = Date.now();
-    var jobs = [
-      writeGameFile("undertale.sav", savJson + "\u0000", ts),
-      writeGameFile("file0", file0, ts),       /* kept as real files too, harmless */
-      writeGameFile("undertale.ini", ini, ts)
-    ];
-    return Promise.all(jobs).then(function (ok) {
-      console.log("[UTBossStates] wrote " + b.name + " state (undertale.sav + file0/ini) - reload and CONTINUE");
-      return { boss: b, name: name, wrote: ok };
+    }).then(function (savJson) {
+      var jobs = [
+        writeGameFile("undertale.sav", savJson + "\u0000", ts),
+        writeGameFile("file0", file0, ts),       /* kept as real files too, harmless */
+        writeGameFile("undertale.ini", ini, ts)
+      ];
+      return Promise.all(jobs).then(function (ok) {
+        console.log("[UTBossStates] wrote " + b.name + " state (undertale.sav + file0/ini) - reload and CONTINUE");
+        return { boss: b, name: name, wrote: ok };
+      });
     });
   }
 
@@ -2402,6 +2575,28 @@ var UTFONT = {
   }
 
   /* ---------- screens ---------- */
+  /* v1.8: equipment set bonuses (exact weapon+armor pairs, same table the
+     game's scr_weaponeq/scr_armoreq/scr_itemname patches use - see the
+     pair thresholds in game data v1.7: 196/844/911/1624/2924/3054/3184/3314).
+     weapon/armor here are file0's line-28/29 values (the equipment ids). */
+  var SET_BONUS = (function () {
+    var t = {};
+    t[3 * 64 + 4] = "SET: COMFORT FOOD - ITEMS HEAL +5";        /* Stick + Bandage */
+    t[13 * 64 + 12] = "SET: TOY KNIFE + RIBBON - ATK +2 DF +1"; /* Toy Knife + Faded Ribbon */
+    t[14 * 64 + 15] = "SET: GLOVE + BANDANNA - ATK +3 DF +1";    /* Tough Glove + Manly Bandanna */
+    t[25 * 64 + 24] = "SET: SHOES + TUTU - I-FRAMES +60%";      /* Ballet Shoes + Old Tutu */
+    t[45 * 64 + 44] = "SET: NOTEBOOK + GLASSES - ATK +2 DF +2"; /* Torn Notebook + Cloudy Glasses */
+    t[47 * 64 + 46] = "SET: HOME COOKING - ITEMS HEAL +10";     /* Burnt Pan + Stained Apron */
+    t[49 * 64 + 48] = "SET: GUN + HAT - ATK +3 DF +2";          /* Empty Gun + Cowboy Hat */
+    t[51 * 64 + 50] = "SET: DAGGER + LOCKET - ATK +2 DF +4";    /* Worn Dagger + Heart Locket */
+    return t;
+  })();
+  function setBonusLine(info) {
+    if (!info || typeof info.weapon !== "number" || typeof info.armor !== "number") return null;
+    var key = info.weapon * 64 + info.armor;
+    return SET_BONUS[key] || null;
+  }
+
   function drawMain() {
     var info = S.info;
     if (info) {
@@ -2414,6 +2609,9 @@ var UTFONT = {
       text(badge, W - 36 - textW(badge, 2), 14, 2, routeColor(info.route));
       var loc = (info.boss ? info.boss + " - " : "") + info.area;
       text(loc, 36, 48, 1, COL.hint);
+      /* v1.8: live set-bonus readout under the stats strip */
+      var sb = setBonusLine(info);
+      if (sb) text(sb, W - 36 - textW(sb, 1), 48, 1, COL.sel);
     }
 
     box(32, 84, 576, 246);
@@ -2534,8 +2732,14 @@ var UTFONT = {
     close();
     window.UTBossStates.load(b.id).then(function () {
       setTimeout(function () { window.location.reload(); }, 150);
-    }, function () {
-      setTimeout(function () { window.location.reload(); }, 150);
+    }, function (err) {
+      /* v1.8: the write failed (IndexedDB blocked/full). Do not reload into
+         a half-written state - report and stay on the menu. */
+      console.log("[UTBossStates] write FAILED, not reloading:", err);
+      try {
+        showRollbackMessage("COULD NOT WRITE SAVE - STORAGE FULL OR BLOCKED");
+      } catch (e) {}
+      S.confirm = null;
     });
   }
   function bossUp() {

@@ -2294,7 +2294,14 @@ var z = {
                             entries: c
                         });
                         c[g.primaryKey] = {
-                            timestamp: g.key
+                            timestamp: g.key instanceof Date ? g.key : (function (v) {
+                                try {
+                                    var dt = new Date(v);
+                                    return isNaN(dt.getTime()) ? new Date(0) : dt;
+                                } catch (er) {
+                                    return new Date(0);
+                                }
+                            })(g.key)
                         };
                         g.continue()
                     }
@@ -2384,7 +2391,7 @@ var z = {
             Object.keys(a.entries).forEach(function(q) {
                 var u = a.entries[q],
                     w = b.entries[q];
-                w && u.timestamp.getTime() == w.timestamp.getTime() || (f.push(q), e++)
+                w && (u.timestamp instanceof Date && u.timestamp.getTime ? u.timestamp : new Date(u.timestamp)).getTime() == (w.timestamp instanceof Date && w.timestamp.getTime ? w.timestamp : new Date(w.timestamp)).getTime() || (f.push(q), e++)
             });
             var g = [];
             Object.keys(b.entries).forEach(function(q) {

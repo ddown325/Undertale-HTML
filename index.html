@@ -1,6 +1,22 @@
 <!DOCTYPE html>
 <html lang="en-us">
   <head>
+<script>
+window.__ring = [];
+(function () {
+  function fmt(a) { return [].slice.call(a).map(function (x) { return typeof x === 'string' ? x : String(x && x.message || x); }).join(' ').slice(0, 400); }
+  var oe = console.error, ow = console.warn;
+  console.error = function () { window.__ring.push({ t: 'err', m: fmt(arguments), at: performance.now() }); if (window.__ring.length > 600) window.__ring.shift(); oe.apply(console, arguments); };
+  console.warn = function () { window.__ring.push({ t: 'warn', m: fmt(arguments), at: performance.now() }); if (window.__ring.length > 600) window.__ring.shift(); ow.apply(console, arguments); };
+  window.addEventListener('error', function (e) {
+    window.__ring.push({ t: 'onerror', m: (e.message || '') + ' @ ' + (e.filename || '') + ':' + e.lineno + ' :: ' + String(e.error && e.error.stack || '').slice(0, 500) });
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    window.__ring.push({ t: 'reject', m: String(e.reason).slice(0, 300) });
+  });
+})();
+</script>
+
   <base href="./">
     <meta charset="utf-8" />
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
@@ -274,11 +290,165 @@
         return { timestamp: new Date(), mode: 33206, contents: value };
       }
 
+      /* [ut-savedata-healer] ==================================================
+         v1.8. The game keeps EVERY file inside undertale.sav as one JSON
+         map ( { "file0": "<549 lines>", "file9": ...,
+         "undertale.ini": ... } ). scr_load reads file0 line-by-line with
+         exactly 549 readlns, and any ossafe_file_text_* call on a file
+         that failed to open is a FATAL GameMaker exception (crash.log:
+         "File is not opened for reading" -> the runner re-inits, the
+         player loses the session). Old cloud-synced / pre-v1.7 maps can
+         be short, truncated or missing entries, so the sav the game
+         reads is validated and repaired HERE, at the only door the
+         runner uses to fetch it (gameStorage.get), before the game
+         ever decodes it. Repairs are written straight back. */
+      function __utNodeText(node) {
+        var c = node && node.contents;
+        if (c == null) return "";
+        if (typeof c === "string") return c;
+        if (c instanceof Uint8Array || c instanceof ArrayBuffer) {
+          try {
+            return new TextDecoder("utf-8").decode(c instanceof Uint8Array ? c : new Uint8Array(c));
+          } catch (e) { return ""; }
+        }
+        return String(c);
+      }
+      function __utFixFile0(txt) {
+        if (typeof txt !== "string" || !txt) return null;
+        var t = txt.replace(/\r\n?/g, "\n");
+        if (t.charAt(t.length - 1) !== "\n") t += "\n";
+        var L = t.split("\n");
+        /* split leaves a trailing "" after the final newline */
+        while (L.length && L[L.length - 1] === "") L.pop();
+        if (L.length === 0) return null;
+        for (var i = 0; i < 549; i++) {
+          if (L[i] === undefined || L[i] === "") L[i] = "0";
+        }
+        L.length = 549;
+        var out = "";
+        for (var n = 0; n < 549; n++) out += L[n] + "\n";
+        return out;
+      }
+      function __utSynthIni(txt) {
+        var L = String(txt).replace(/\r\n?/g, "\n").split("\n");
+        var g = function (i, d) { var v = (L[i] !== undefined) ? String(L[i]).replace(/^\s+|\s+$/g, "") : ""; return v || d; };
+        return "[General]\nName=" + g(0, "FRISK") + "\nLove=" + g(1, "1") +
+          "\nTime=" + g(548, "0") + "\nKills=" + g(11, "0") + "\nRoom=" + g(547, "5") + "\n";
+      }
+      function __utIniOk(txt) {
+        return typeof txt === "string" && /^\s*\[General\]/i.test(txt);
+      }
+      function __utHealSavNode(node) {
+        /* returns the node (repaired in place) - caller persists if changed */
+        var txt = __utNodeText(node);
+        if (txt.charCodeAt(txt.length - 1) === 0) txt = txt.slice(0, -1);
+        var map, dead = false;
+        try { map = JSON.parse(txt); } catch (e) { map = null; }
+        if (!map || typeof map !== "object") { map = {}; dead = true; }
+        var changed = dead;
+        /* file0 - the load-bearing entry: scr_load reads exactly 549 lines */
+        var f0 = __utFixFile0(map["file0"]);
+        if (f0 === null) {
+          /* recover: from the on-disk record, else the localStorage mirror,
+             else synthesize a fresh LV1 file so the game boots instead of
+             throwing the fatal "File is not opened for reading" */
+          var rec = null, mir = null;
+          try { rec = window.oprt.__utGetFSFile && window.oprt.__utGetFSFile("file0"); } catch (e0) {}
+          try { mir = localStorage.getItem("ut/_savedata/file0"); } catch (e1) {}
+          var cand = rec || mir;
+          f0 = __utFixFile0(cand);
+          if (f0 === null) {
+            f0 = "FRISK\n";
+            for (var z = 1; z < 549; z++) f0 += (z === 547 ? "5" : "0") + "\n";
+          }
+        }
+        if (map["file0"] !== f0) { map["file0"] = f0; changed = true; }
+        /* file9 - the temp save: same 549-line format, heal the same way */
+        if (map["file9"] !== undefined && map["file9"] !== null) {
+          var f9 = __utFixFile0(map["file9"]);
+          if (f9 === null) { delete map["file9"]; changed = true; }
+          else if (map["file9"] !== f9) { map["file9"] = f9; changed = true; }
+        }
+        /* undertale.ini - scr_gameoverb / obj_titleimage open + write it;
+           a missing one is the same fatal class */
+        if (!__utIniOk(map["undertale.ini"])) {
+          var iniRec = null, iniMir = null;
+          try { iniRec = window.oprt.__utGetFSFile && window.oprt.__utGetFSFile("undertale.ini"); } catch (e2) {}
+          try { iniMir = localStorage.getItem("ut/_savedata/undertale.ini"); } catch (e3) {}
+          var ini = __utIniOk(iniRec) ? iniRec : (__utIniOk(iniMir) ? iniMir : __utSynthIni(f0));
+          map["undertale.ini"] = ini;
+          changed = true;
+        }
+        if (!changed) return { node: node, changed: false };
+        var out = JSON.stringify(map) + "\u0000";
+        var healed = { timestamp: new Date(), mode: 33206, contents: new TextEncoder().encode(out) };
+        try { console.log("[ut-heal] repaired undertale.sav" + (dead ? " (unparseable JSON - rebuilt)" : "")); } catch (e4) {}
+        return { node: healed, changed: true };
+      }
+
+      /* legacy-record sweep: records whose timestamp is not a Date crash
+         the runner's own GXMFS.syncfs ("w.timestamp.getTime is not a
+         function") on every reconcile. Normalize them once per session;
+         content is preserved byte-for-byte. */
+      function __utSweepLegacyTimestamps() {
+        if (window.__utSweptTS) return;
+        window.__utSweptTS = true;
+        openDB().then(function (db) {
+          return new Promise(function (resolve) {
+            try {
+              var t = db.transaction(["FILE_DATA"], "readwrite");
+              var st = t.objectStore("FILE_DATA");
+              var fixed = 0;
+              var cur = st.openCursor();
+              cur.onsuccess = function (e) {
+                var c = e.target.result;
+                if (!c) { if (fixed) console.log("[ut-heal] normalized " + fixed + " legacy record timestamp(s)"); db.close(); resolve(); return; }
+                var n = c.value;
+                if (n && typeof n === "object" && !(n.timestamp instanceof Date)) {
+                  try {
+                    var ts = n.timestamp ? new Date(Number(n.timestamp) || 0) : new Date(0);
+                    if (isNaN(ts.getTime())) ts = new Date(0);
+                    c.update({ timestamp: ts, mode: (typeof n.mode === "number" ? n.mode : 33206), contents: n.contents });
+                    fixed++;
+                  } catch (er) {}
+                }
+                c.continue();
+              };
+              cur.onerror = function () { db.close(); resolve(); };
+              t.oncomplete = function () { db.close(); resolve(); };
+            } catch (e) { db.close(); resolve(); }
+          });
+        }).catch(function () {});
+      }
+
+      window.oprt = window.oprt || {};
+      window.oprt.__utGetFSFile = function (name) {
+        /* synchronous last-resort readers for the healer's recovery paths.
+           Mirror format (savesync.js): OBJ:{"contents":"AB:<b64>",...}
+           or a bare AB:<b64> leaf. */
+        try {
+          var raw = localStorage.getItem("ut/_savedata/" + name);
+          if (raw == null) return null;
+          var leaf = null;
+          if (raw.indexOf("OBJ:") === 0) {
+            try {
+              var nd = JSON.parse(raw.slice(4));
+              leaf = nd && typeof nd === "object" ? nd.contents : null;
+            } catch (e) { return null; }
+          } else leaf = raw;
+          if (typeof leaf !== "string" || leaf.indexOf("AB:") !== 0) return null;
+          var b64 = leaf.slice(3), bin = atob(b64), s = "";
+          for (var i = 0; i < bin.length; i++) s += String.fromCharCode(bin.charCodeAt(i) & 0xff);
+          return s;
+        } catch (e) { return null; }
+      };
+
       window.oprt.gameStorage = {
         open: function (name) {
           if (!window.__gsTrace) window.__gsTrace = [];
           if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
           window.__gsTrace.push("open:" + name);
+          __utSweepLegacyTimestamps();
           /* DELETE GUARD v2 (v1.5) - NEVER delete through the polyfill.
              WHY: the runner's reconciles are NOT serialized ("FS.syncfs
              operations in flight at once"). At boot / game restart the
@@ -330,7 +500,21 @@
                 var r = st.get(norm(key));
                 return { __req: r };
               }).then(function (node) {
-                return node === undefined ? node : saneNode(node);
+                if (node === undefined) return node;
+                var healed = saneNode(node);
+                if (norm(key) === "/_savedata/undertale.sav" && healed) {
+                  try {
+                    var res = __utHealSavNode(healed);
+                    if (res.changed) {
+                      healed = res.node;
+                      /* persist the repair so the next boot starts clean */
+                      tx("readwrite", function (st) {
+                        st.put(healed, norm(key));
+                      }).catch(function () {});
+                    }
+                  } catch (e) {}
+                }
+                return healed;
               });
             },
             put: function (node, key) {
@@ -367,7 +551,7 @@
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v1.7';
+      var CACHE_VERSION = 'v1.8';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no

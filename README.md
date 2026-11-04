@@ -93,6 +93,43 @@ worker re-checks for updates on every visit and revalidates shell files
 with `cache: 'no-cache'` — a stale cached `index.js` could previously make
 you run pre-fix save code for up to 10 minutes after a deploy.
 
+**v1.8 — the crash fixes.** Three crash classes, all rooted in the same
+save plumbing, are dead now:
+
+1. **"Taking damage / dying crashes the game — in a lot of areas."** When
+   you die, `scr_gameoverb` opens `undertale.ini`, bumps a counter, and
+   re-saves the whole savedata buffer — and `scr_load` reads `file0` line
+   by line, exactly 549 lines. A savedata map whose `file0` is short,
+   truncated, or missing (old cloud-synced / pre-v1.7 copies) makes those
+   file reads fail, which is a *fatal* GameMaker exception
+   (`crash.log`: *"File is not opened for reading"* → the runner dies and
+   the whole game re-boots). The gameStorage polyfill now **validates and
+   repairs the savedata buffer at the exact door the runner reads it**:
+   `file0` is normalized to 549 lines (recovering from the on-disk record
+   or the mirror, or worst-case a fresh LV 1 file), `file9` is healed the
+   same way, and a missing `undertale.ini` is synthesized from file0's
+   own values. Repairs are written back so the next boot starts clean.
+2. **The old `w.timestamp.getTime is not a function` boot/save crash.**
+   Records written by pre-v1.6 code (or old WigdosXP imports) carry
+   numeric/string timestamps, and the runner's own GXMFS syncfs throws on
+   the first reconcile that touches them — forever, since the delete
+   guard kept them around. The syncfs now normalizes timestamps at read
+   time (runner.js), and each session runs a one-shot sweep that rewrites
+   any non-Date timestamp in the save database into a proper `Date`,
+   content untouched.
+3. **Boss-state writes now go through the live database record** instead
+   of the up-to-10-seconds-stale localStorage mirror (a stale merge could
+   resurrect old `file0`/ini entries mid-write), and a failed write is
+   reported on the menu instead of silently reloading into a half-written
+   state.
+
+Also in v1.8: the pause menu's stats strip shows your current equipment
+**set bonus** (live, from the same exact-pair table the game data uses),
+Undyne the Undying's state lands in `room_water19` and Mettaton NEO's at
+LV 15 in `room_fire_turn` (verified against the bytecode triggers), and
+loading a boss state stashes your old weapon/armor in the dimensional
+box instead of eating them.
+
 **v1.7 — boss states land where they should, set bonuses are real, and the
 lag is gone.**
 
@@ -134,7 +171,7 @@ hand-crafted save: the right stats, equipment, inventory, route flags and
 plot value the fight expects, all computed the way the game's own scripts do it
 (`scr_levelup` / `scr_weaponeq` / `scr_armoreq` / `scr_murderlv`):
 
-- **TORIEL** — Ruins exit, LV 1 (Toy Knife + Bandage)
+- **TORIEL** — Ruins exit, LV 1 (Toy Knife + Faded Ribbon)
 - **PAPYRUS** — the fog, LV 1 (Tough Glove + Manly Bandanna)
 - **UNDYNE** — Waterfall, LV 1 (Ballet Shoes + Old Tutu)
 - **UNDYNE THE UNDYING** — Genocide, LV 11, room_water19 (the
