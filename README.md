@@ -131,17 +131,32 @@ lag is gone.**
 **Boss states — skip straight to any fight.** From the pause menu's
 **BOSS STATES** screen you can jump straight to any major fight with a
 hand-crafted save: the right stats, equipment, inventory, route flags and
-plot value the fight expects, all computed the way the game's own scripts do
-it (`scr_levelup` / `scr_weaponeq` / `scr_armoreq` / `scr_murderlv`):
+plot value the fight expects, all computed the way the game's own scripts do it
+(`scr_levelup` / `scr_weaponeq` / `scr_armoreq` / `scr_murderlv`):
 
 - **TORIEL** — Ruins exit, LV 1 (Toy Knife + Bandage)
 - **PAPYRUS** — the fog, LV 1 (Tough Glove + Manly Bandanna)
 - **UNDYNE** — Waterfall, LV 1 (Ballet Shoes + Old Tutu)
-- **UNDYNE THE UNDYING** — Genocide, LV 11, the murderlv chain armed
+- **UNDYNE THE UNDYING** — Genocide, LV 11, room_water19 (the
+  waterfall bridge — walk through and the fight triggers)
 - **METTATON EX** — The Core stage, LV 12
-- **METTATON NEO** — Genocide, LV 13
+- **METTATON NEO** — Genocide, LV 15, the Hotland room before the
+  Core entrance (plot 160, the murderlv chain complete through
+  Undyne the Undying — the scene fires as soon as you walk up)
 - **ASGORE** — the Barrier, LV 12 (Empty Gun + Cowboy Hat)
 - **SANS** — Genocide, LV 19, Real Knife + The Locket, the Last Corridor
+
+*(v1.8: every trigger's plot condition and the whole `scr_murderlv`
+chain were re-verified instruction-by-instruction against the game's
+bytecode. Two genocide states were genuinely broken before: UNDYNE THE
+UNDYING landed in a neutral-route bridge room instead of
+`room_water19`, and METTATON NEO landed on the neutral EX stage with a
+plot value that disables the NEO scene — it now starts in
+`room_fire_turn` at plot 160, LV 15 / 7000 EXP / 97 kills, exactly
+what a real genocide run looks like at the Core entrance. The
+GENOCIDE flag chains themselves were confirmed correct as they were,
+and the menu's JavaScript port of `scr_murderlv` now matches the
+bytecode comparison-for-comparison.)*
 
 These are **not backups** — selecting one *replaces your current file*
 (the menu says so and asks first). After the jump, CONTINUE starts you a few

@@ -1722,26 +1722,30 @@ function notify_config_change() {
     return null;
   }
 
-  /* exact port of scr_murderlv ------------------------------------------- */
+  /* exact port of scr_murderlv -------------------------------------------
+     (v1.8: re-verified against the bytecode, comparison for comparison.
+     The game uses GTE for the kill counters, EQU for the story flags,
+     and flag 27 must be exactly 0 for the corridor step. flag 26 is a
+     debug override that only fires when > 0, so it is not ported.) */
   function murderlv(f) {
     function g(i) { return (f && f.length > i) ? (+f[i] || 0) : 0; }
     var m = 0;
-    if (g(202) === 20) m = 1;
-    if (m >= 1 && g(45) >= 4) m = 2;
-    if (m >= 2 && g(52) >= 1) m = 3;
-    if (m >= 3 && g(53) >= 1) m = 4;
-    if (m >= 4 && g(54) >= 1) m = 5;
-    if (m >= 5 && g(57) >= 2) m = 6;
-    if (m >= 6 && g(203) === 16) m = 7;
-    if (m >= 7 && g(67) >= 1) m = 8;
-    if (m >= 8 && g(81) >= 1) m = 9;
-    if (m >= 9 && g(252) >= 1) m = 10;
-    if (m >= 10 && g(204) === 18) m = 11;
-    if (m >= 11 && g(251) >= 1 && g(350) >= 1) m = 12;
-    if (m >= 12 && g(402) >= 1) m = 13;
-    if (m >= 13 && g(397) >= 1) m = 14;
-    if (m >= 14 && g(205) === 40) m = 15;
-    if (m >= 15 && g(425) >= 1 && g(27) >= 0) m = 16;
+    if (g(202) >= 20) m = 1;
+    if (m === 1 && g(45) === 4) m = 2;
+    if (m === 2 && g(52) === 1) m = 3;
+    if (m === 3 && g(53) === 1) m = 4;
+    if (m === 4 && g(54) === 1) m = 5;
+    if (m === 5 && g(57) === 2) m = 6;
+    if (m === 6 && g(203) >= 16) m = 7;
+    if (m === 7 && g(67) === 1) m = 8;
+    if (m === 8 && g(81) === 1) m = 9;
+    if (m === 9 && g(252) === 1) m = 10;
+    if (m === 10 && g(204) >= 18) m = 11;
+    if (m === 11 && g(251) === 1 && g(350) === 1) m = 12;
+    if (m === 12 && g(402) === 1) m = 13;
+    if (m === 13 && g(397) === 1) m = 14;
+    if (m === 14 && g(205) >= 40) m = 15;
+    if (m === 15 && g(425) === 1 && g(27) === 0) m = 16;
     return m;
   }
 
@@ -1763,9 +1767,12 @@ function notify_config_change() {
     var rn = info.roomName, g = info.route === "GENOCIDE";
     if (rn === "room_sanscorridor") return "SANS";
     if (g && (rn === "room_water_trashsavepoint" || rn === "room_water_undynebridge" ||
-              rn === "room_water_undynebridgeend" || rn === "room_water_preundyne")) return "UNDYNE THE UNDYING";
+              rn === "room_water_undynebridgeend" || rn === "room_water_preundyne" ||
+              rn === "room_water19" || rn === "room_water20" || rn === "room_water21"))
+      return "UNDYNE THE UNDYING";
     if (/^room_water_undynefinal/.test(rn)) return "UNDYNE";
-    if (g && (rn === "room_fire_core_warrior" || rn === "room_fire_core_premett")) return "METTATON NEO";
+    if (g && (rn === "room_fire_turn" || rn === "room_fire_hoteldoors" ||
+              rn === "room_fire_precore")) return "METTATON NEO";
     if (!g && (rn === "room_fire_core_final" || rn === "room_fire_core_premett")) return "METTATON EX";
     if (rn === "room_asgoreroom" || rn === "room_castle_prebarrier" || rn === "room_castle_barrier") return "ASGORE";
     if (rn === "room_floweyx" || rn === "room_floweybattle") return "FLOWEY";
@@ -1831,10 +1838,19 @@ function notify_config_change() {
      stats   maxhp = 16 + 4*lv, at = 8 + 2*lv, df = 9 + ceil(lv/4)
              (LV20 caps at 99)
      weapon  AT bonus goes into wstrength, armor DF bonus into adef
-     EXP     the game's own LV thresholds (LV19 = 50000, ...)
-     plot    the value that arms the fight trigger (probed from the
-             trigger objects: Toriel 24, Papyrus 100, Undyne 121,
-             Undyne the Undying 114+, Mettaton 197, Asgore 208, Sans 200)
+     EXP     the game's own LV thresholds, verified in scr_levelup's
+             bytecode: LV11=1700, LV12=2500, LV13=3500, LV15=7000,
+             LV19=50000, LV20=99999
+     plot    the value that arms the fight trigger, verified against the
+             trigger objects' own bytecode (all use strictly-greater-than
+             "done" checks, so the arming value itself survives):
+             Toriel 24, Papyrus 100, Undyne 121, Undyne the Undying 114
+             (arms obj_monsterkidtrigger7: plot <= 119, murderlv >= 11,
+             flag 27 == 0 - reached through room_water19/20),
+             Mettaton EX 197 (mettboss_event: plot > 197 kills it),
+             Mettaton NEO 160 (killerboysnightout_event in room_fire_turn:
+             plot <= 163, murderlv >= 12), Asgore 208, Sans 200
+             (lastsans_trigger: plot > 200 kills it, murderlv >= 16)
      flags   genocide states set exactly the murderlv chain the fight
              needs - nothing more, so no story flags are lied about
 
@@ -1858,6 +1874,7 @@ function notify_config_change() {
   var GEN_WATER   = { 204: 18 };
   var GEN_AFTER_UT   = { 251: 1, 350: 1 };          /* Undyne the Undying dead */
   var GEN_AFTER_NEO  = { 402: 1, 397: 1 };           /* Mettaton NEO dead       */
+  var GEN_HOTLAND = { 205: 40 };                      /* 40 Hotland/Core kills   */
   var GEN_ENDGAME = { 205: 40, 425: 1, 27: 0 };     /* Hotland clear + corridor */
 
   function genFlags(chain) {
@@ -1891,32 +1908,35 @@ function notify_config_change() {
       time: 2400, sub: "WATERFALL - THE YARD" },
     { id: "undyneut", name: "UNDYNE THE UNDYING",   area: "WATERFALL",
       route: "GENOCIDE", lv: 11, xp: 1700,  kills: 56,  gold: 60,
-      room: 112, plot: 114,
+      room: 132, plot: 114,                       /* room_water19 - the bridge  */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER]),
       weapon: 25, armor: 24, wstrength: 7,  adef: 10,
       items: [16, 16, 41, 41, 43, 43, 0, 0],
       time: 3000, sub: "WATERFALL - THE BRIDGE" },
     { id: "mettatonex", name: "METTATON EX",        area: "THE CORE",
-      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 240,
+      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 240,  /* LV12 = 2500 xp */
       room: 212, plot: 197,
       weapon: 47, armor: 46, wstrength: 10, adef: 11,   /* Burnt Pan + Stained Apron */
       items: [36, 36, 40, 40, 41, 41, 0, 0],        /* 2x Instant Noodles, Glamburger, Sea Tea */
       time: 3600, sub: "THE CORE - THE STAGE" },
-    { id: "mettatonneo", name: "METTATON NEO",      area: "THE CORE",
-      route: "GENOCIDE", lv: 13, xp: 3500,  kills: 57,  gold: 100,
-      room: 212, plot: 197,
-      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT]),
+    { id: "mettatonneo", name: "METTATON NEO",      area: "HOTLAND",
+      route: "GENOCIDE", lv: 15, xp: 7000,  kills: 97,  gold: 100,
+      room: 154, plot: 160,   /* room_fire_turn: killerboysnightout_event arms   */
+                              /* at plot < 163 + murderlv 12 (251/350 set).     */
+                              /* LV15 = 7000 xp (scr_levelup); kills = 20+1+16  */
+                              /* +1+18+1+40 = 97 at the Core entrance.         */
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_HOTLAND]),
       weapon: 47, armor: 46, wstrength: 10, adef: 11,
       items: [43, 43, 36, 36, 61, 61, 0, 0],        /* 2x Legendary Hero, Instant Noodles, Face Steak */
-      time: 3900, sub: "THE CORE - THE STAGE" },
+      time: 3900, sub: "HOTLAND - THE CORE ENTRANCE" },
     { id: "asgore",   name: "ASGORE",               area: "THE BARRIER",
       route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 300,
       room: 238, plot: 208,
-      weapon: 49, armor: 48, wstrength: 17, adef: 12,   /* Empty Gun + Cowboy Hat (AT+5) */
+      weapon: 49, armor: 48, wstrength: 12, adef: 12,   /* Empty Gun AT12 + Cowboy Hat DF12 (scr_weaponeq/armoreq) */
       items: [11, 36, 36, 43, 43, 0, 0, 0],         /* Butterscotch Pie, 2x Instant Noodles, Legendary Hero */
       time: 4200, sub: "NEW HOME - THE BARRIER" },
     { id: "sans",     name: "SANS",                 area: "THE LAST CORRIDOR",
-      route: "GENOCIDE", lv: 19, xp: 50000, kills: 100, gold: 120,
+      route: "GENOCIDE", lv: 19, xp: 50000, kills: 98, gold: 120,  /* 97 + NEO */
       room: 232, plot: 200,
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_ENDGAME]),
       weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
