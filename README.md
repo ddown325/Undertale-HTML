@@ -8,7 +8,7 @@ Fan project. UNDERTALE was created by Toby Fox — support the official game at
 ## Offline / single-file edition
 
 Don't want to stream ~120 MB every time your browser cache clears? Grab the
-**single-file offline edition** — the complete game (engine, data and all 211
+**single-file offline edition** — the complete game (engine, data and all 212
 music files) packed into one `.html` file. Save it anywhere, double-click it,
 play with no internet:
 
@@ -129,6 +129,20 @@ Undyne the Undying's state lands in `room_water19` and Mettaton NEO's at
 LV 15 in `room_fire_turn` (verified against the bytecode triggers), and
 loading a boss state stashes your old weapon/armor in the dimensional
 box instead of eating them.
+
+**v1.8 — HARDER SANS: the 1-in-3 cursed session.** Each page load rolls a
+die. One time in three, **the whole session plays out under the alternate
+Megalovania** — `mus_zz_megalovania_alternate.ogg` instead of the normal
+track for every Sans fight that session — and while it plays, Sans hits
+**1.3× harder, karma included**: every karma gain from contact with his
+bones, Gaster Blasters and the menu bones, *and* every tick of the purple
+KR drain, is multiplied by 1.3. The roll is session-scoped on purpose —
+the engine decodes each sound once and keeps it for the life of the page,
+so a per-fight swap could silently desync music vs. damage; this way the
+music and the multiplier always agree. The chance is handed to the game
+through `hardmode.flag` in the same storage your save lives in, and the
+game clamps it to ≥ 1, so even a storage failure can never *reduce* his
+damage. Reload for a fresh 1-in-3. (Game data v1.8 — loader footer.)
 
 **v1.7 — boss states land where they should, set bonuses are real, and the
 lag is gone.**

@@ -173,7 +173,7 @@ window.__ring = [];
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
-        <span>v1.7</span>
+        <span>v1.8</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
@@ -547,6 +547,63 @@ window.__ring = [];
       'use strict';
 
       /* ==========================================================
+       *  v1.8 - HARDER SANS (session roll, 1 in 3)
+       *  ----------------------------------------------------------
+       *  One roll per page load. If it hits, every Sans fight this
+       *  session plays mus_zz_megalovania_alternate.ogg instead of
+       *  Megalovania (VFS swap in main()), and hardmode.flag is
+       *  written into the savedata store so the game's Last
+       *  Corridor trigger reads it and multiplies every source of
+       *  Sans's damage - karma gain on contact AND the KR drain -
+       *  by 1.3. Session-scoped on purpose: the runner decodes each
+       *  sound index once and caches it for the life of the page,
+       *  so a per-fight swap could silently desync music vs damage.
+       *  The game clamps its read to >= 1, so a failed write can
+       *  never zero out damage.
+       *  (index.js carries a guarded copy of the roll for exotic
+       *  embeds that load it standalone - e.g. the offline build.)
+       * ========================================================== */
+      var UT_HARD_SANS = (Math.random() < 1 / 3);
+      window.__utHardSans = UT_HARD_SANS;
+      (function writeHardSansFlag() {
+        var value = UT_HARD_SANS ? '1.3' : '1';
+        function openDB() {
+          return new Promise(function (resolve, reject) {
+            var req;
+            try { req = indexedDB.open('/_savedata', 21); }
+            catch (e) { reject(e); return; }
+            req.onupgradeneeded = function (e) {
+              var db = e.target.result;
+              if (!db.objectStoreNames.contains('FILE_DATA')) db.createObjectStore('FILE_DATA');
+            };
+            req.onsuccess = function (e) { resolve(e.target.result); };
+            req.onerror = function () {
+              if (req.error && req.error.name === 'VersionError') {
+                var req2;
+                try { req2 = indexedDB.open('/_savedata'); }
+                catch (e2) { reject(e2); return; }
+                req2.onsuccess = function (e2) { resolve(e2.target.result); };
+                req2.onerror = function () { reject(req2.error); };
+              } else { reject(req.error); }
+            };
+            req.onblocked = function () { reject(new Error('db blocked'));
+            };
+          });
+        }
+        openDB().then(function (db) {
+          try {
+            var t = db.transaction(['FILE_DATA'], 'readwrite');
+            var st = t.objectStore('FILE_DATA');
+            var bytes = new TextEncoder().encode(value + '\n');
+            st.put({ timestamp: new Date(), mode: 33206, contents: bytes },
+                   '/_savedata/hardmode.flag');
+            t.oncomplete = function () { db.close(); };
+            t.onerror = t.onabort = function () { db.close(); };
+          } catch (e) { try { db.close(); } catch (e2) {} }
+        }).catch(function () {});
+      })();
+
+      /* ==========================================================
        *  CONFIG - bump CACHE_VERSION whenever you update any game
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
@@ -561,7 +618,7 @@ window.__ring = [];
         'game.unx.part2': 19993648,
         'game.unx.part3': 19993648,
         'game.unx.part4': 19993648,
-        'game.unx.part5': 20002092,
+        'game.unx.part5': 20037976,
         'runner.wasm': 5645898,
         'runner.data': 12561615,
         'audio-worklet.js': 491,
@@ -570,7 +627,7 @@ window.__ring = [];
       };
       var PARTS = ['game.unx.part1', 'game.unx.part2', 'game.unx.part3', 'game.unx.part4', 'game.unx.part5'];
       var RUNTIME = ['runner.wasm', 'runner.data', 'audio-worklet.js', 'lang/lang_en.json', 'lang/lang_ja.json'];
-      var TOTAL_BYTES = 120881897;
+      var TOTAL_BYTES = 120917781;
 
       var el = {
         loader: document.getElementById('utLoader'),
@@ -827,6 +884,23 @@ window.__ring = [];
           VFS['audio-worklet.js'] = URL.createObjectURL(new Blob([results['audio-worklet.js']], { type: 'text/javascript' }));
           VFS['lang_en.json'] = URL.createObjectURL(new Blob([results['lang/lang_en.json']], { type: 'application/json' }));
           VFS['lang_ja.json'] = URL.createObjectURL(new Blob([results['lang/lang_ja.json']], { type: 'application/json' }));
+
+          /* v1.8 - HARDER SANS: on the winning roll, load the alternate
+           * megalovania now and serve it whenever the runner asks for the
+           * original - the swap is a plain VFS entry, so nothing in the
+           * runner or the SW has to change. Only hard-mode sessions pay
+           * the extra ~3 MB download; the file is cached like the rest. */
+          if (window.__utHardSans) {
+            try {
+              var alt = await fetchFile('mus_zz_megalovania_alternate.ogg');
+              VFS['mus_zz_megalovania.ogg'] = URL.createObjectURL(
+                new Blob([alt], { type: 'audio/ogg' }));
+            } catch (e) {
+              /* alternate unavailable - the fight just uses the normal
+               * track; the damage boost still applies (flag said 1.3). */
+              console.warn('[loader] harder-sans track unavailable:', e && e.message);
+            }
+          }
 
           /* clean caches from older versions once we're done with them */
           caches.keys().then(function (keys) {

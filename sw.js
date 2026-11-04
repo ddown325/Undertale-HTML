@@ -230,6 +230,7 @@ var GAME_FILES = new Set([
     "mus_yourbestfriend_3.ogg",
     "mus_z_ending.ogg",
     "mus_zz_megalovania.ogg",
+    "mus_zz_megalovania_alternate.ogg",
     "mus_zzz_c.ogg",
     "mus_zzz_c2.ogg",
     "snd_ballchime.ogg",
