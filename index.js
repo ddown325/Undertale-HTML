@@ -1958,8 +1958,11 @@ function notify_config_change() {
      28 weapon, 29 armor, 30-541 flag[0..511], 542 plot,
      543-545 menuchoice[0..2], 546 currentsong, 547 currentroom, 548 time.
      The game reads line 547 as the room; a shift here makes scr_dogcheck
-     see room 0 (< room_area1) and dump you in room_of_dog. */
-  function buildFile0(b, name) {
+     see room 0 (< room_area1) and dump you in room_of_dog.
+     keep (optional): { boxA: [8 ids], boxB: [8 ids] } - the dimensional
+     boxes, flag 300..307 / 312..319 (obj_itemswapper's own layout, box A
+     at 300, box B at 312 when boxtype == 1). */
+  function buildFile0(b, name, keep) {
     var st = statsFor(b.lv);
     var L = [];
     L[0] = name || "FRISK";
@@ -1984,6 +1987,13 @@ function notify_config_change() {
     /* 30..541: flags (0..511) */
     for (var f = 0; f <= 511; f++) L[30 + f] = 0;
     if (b.flags) for (var k in b.flags) L[30 + Number(k)] = b.flags[k];
+    /* dimensional boxes: flag 300..307 (A) and 312..319 (B) */
+    var boxA = (keep && keep.boxA) || [];
+    var boxB = (keep && keep.boxB) || [];
+    for (var s = 0; s < 8; s++) {
+      L[30 + 300 + s] = boxA[s] || 0;
+      L[30 + 312 + s] = boxB[s] || 0;
+    }
     L[542] = b.plot;
     L[543] = 0; L[544] = 0; L[545] = 0;   /* menuchoice */
     L[546] = 0;                           /* currentsong */
@@ -2128,13 +2138,51 @@ function notify_config_change() {
     return null;
   }
 
+  /* v1.8: the old gear is not lost - it goes to the dimensional box.
+     Boxes are flag 300..307 (A) / 312..319 (B) in file0's flag region
+     (obj_itemswapper reads exactly these slots), 8 items each. */
+  function stashOldGear(b) {
+    var txt = window.UTSaveInfo ? window.UTSaveInfo.findFile("file0") : null;
+    if (typeof txt !== "string") return null;
+    var L = txt.replace(/\r/g, "").split("\n");
+    if (L.length < 549) return null;
+    var oldW = +L[28] || 0, oldA = +L[29] || 0;
+    var boxA = [], boxB = [];
+    for (var i = 0; i < 8; i++) {
+      boxA.push(+L[30 + 300 + i] || 0);
+      boxB.push(+L[30 + 312 + i] || 0);
+    }
+    /* what deserves a slot: real gear that the state does not hand you
+       anyway (no point duplicating what you are about to equip) */
+    var stash = [];
+    if (oldW > 0 && oldW !== b.weapon) stash.push(oldW);
+    if (oldA > 0 && oldA !== b.armor) stash.push(oldA);
+    if (!stash.length) {
+      /* nothing new to store, but keep whatever the boxes already hold */
+      var had = boxA.some(function (v) { return v > 0; }) ||
+                boxB.some(function (v) { return v > 0; });
+      return had ? { boxA: boxA, boxB: boxB } : null;
+    }
+    var all = boxA.concat(boxB);
+    for (var s = 0; s < stash.length; s++) {
+      var slot = all.indexOf(0);
+      if (slot < 0) {
+        console.log("[UTBossStates] both boxes full - could not stash item " + stash[s]);
+        break;
+      }
+      all[slot] = stash[s];
+    }
+    return { boxA: all.slice(0, 8), boxB: all.slice(8, 16) };
+  }
+
   function load(bossId) {
     var b = null;
     for (var i = 0; i < BOSSES.length; i++) if (BOSSES[i].id === bossId) b = BOSSES[i];
     if (!b) return Promise.reject(new Error("no such boss state: " + bossId));
     var name = player() || "FRISK";
     var existingIni = window.UTSaveInfo ? window.UTSaveInfo.findFile("undertale.ini") : null;
-    var file0 = buildFile0(b, name);
+    var keep = stashOldGear(b);
+    var file0 = buildFile0(b, name, keep);
     var ini = buildIni(b, name, typeof existingIni === "string" ? existingIni : null);
     var savJson = buildSavedata({
       "file0": file0,
@@ -2154,7 +2202,8 @@ function notify_config_change() {
   }
 
   window.UTBossStates = {
-    list: BOSSES, load: load, buildFile0: buildFile0, buildIni: buildIni
+    list: BOSSES, load: load, buildFile0: buildFile0, buildIni: buildIni,
+    stashOldGear: stashOldGear
   };
 })();
 
