@@ -64,6 +64,8 @@
     });
   }
 
+
+
   /* v1.6: heal type-lost contents (plain numeric-key objects -> Uint8Array) */
   function saneNode(node) {
     if (!node || typeof node !== "object") return node;
@@ -195,6 +197,64 @@
     }
   };
 })();
+
+/* [ut-hardersans-inline] ==================================================
+   v1.8 - HARDER SANS session roll (1 in 3). index.html owns the roll for
+   the normal online page; this guarded copy exists for embeds that load
+   index.js standalone (e.g. the offline single-file edition), where the
+   inline module is absent. Same rule as the polyfill copies: no-op when
+   the roll already happened.
+
+   The winner gets: mus_zz_megalovania_alternate.ogg instead of Megalovania
+   for every Sans fight this session, and hardmode.flag = "1.3" in the
+   savedata store, which the game's Last Corridor trigger reads to scale
+   all of Sans's damage (karma gain + KR drain) by 1.3. Session-scoped
+   because the runner caches decoded audio per sound index per page.
+   ========================================================================= */
+if (!window.__utHardSansRolled) {
+  window.__utHardSansRolled = true;
+  var UT_HARD = (window.__utHardSans !== undefined)
+    ? window.__utHardSans
+    : (Math.random() < 1 / 3);
+  window.__utHardSans = UT_HARD;
+  (function () {
+    var value = UT_HARD ? "1.3" : "1";
+    function openDB() {
+      return new Promise(function (resolve, reject) {
+        var req;
+        try { req = indexedDB.open("/_savedata", 21); }
+        catch (e) { reject(e); return; }
+        req.onupgradeneeded = function (e) {
+          var db = e.target.result;
+          if (!db.objectStoreNames.contains("FILE_DATA")) db.createObjectStore("FILE_DATA");
+        };
+        req.onsuccess = function (e) { resolve(e.target.result); };
+        req.onerror = function () {
+          if (req.error && req.error.name === "VersionError") {
+            var req2;
+            try { req2 = indexedDB.open("/_savedata"); }
+            catch (e2) { reject(e2); return; }
+            req2.onsuccess = function (e2) { resolve(e2.target.result); };
+            req2.onerror = function () { reject(req2.error); };
+          } else { reject(req.error); }
+        };
+        req.onblocked = function () { reject(new Error("db blocked")); };
+      });
+    }
+    openDB().then(function (db) {
+      try {
+        var t = db.transaction(["FILE_DATA"], "readwrite");
+        var st = t.objectStore("FILE_DATA");
+        var bytes = new TextEncoder().encode(value + "\n");
+        st.put({ timestamp: new Date(), mode: 33206, contents: bytes },
+               "/_savedata/hardmode.flag");
+        t.oncomplete = function () { db.close(); };
+        t.onerror = t.onabort = function () { db.close(); };
+      } catch (e) { try { db.close(); } catch (e2) {} }
+    }).catch(function () {});
+  })();
+}
+/* [ut-hardersans-inline:end] */
 
 const CHANGE_ASPECT_RATIO = true;
 var bodyElement = document.getElementsByTagName("body")[0];
@@ -704,6 +764,7 @@ function manifestFiles()
 "mus_zzz_c.ogg",
 "mus_zzz_c2.ogg",
 "mus_zz_megalovania.ogg",
+"mus_zz_megalovania_alternate.ogg",
 "mus_z_ending.ogg",
 "snd_ballchime.ogg",
 "snd_curtgunshot.ogg",

@@ -5,7 +5,7 @@
  *
  * Keep CACHE_VERSION in sync with the one in index.html.
  */
-var CACHE_VERSION = 'v1.7';
+var CACHE_VERSION = 'v1.8';
 var CACHE = 'undertale-html-' + CACHE_VERSION;
 
 /* Immutable game data - cache-first (never changes unless you bump the version). */
@@ -230,6 +230,7 @@ var GAME_FILES = new Set([
     "mus_yourbestfriend_3.ogg",
     "mus_z_ending.ogg",
     "mus_zz_megalovania.ogg",
+    "mus_zz_megalovania_alternate.ogg",
     "mus_zzz_c.ogg",
     "mus_zzz_c2.ogg",
     "snd_ballchime.ogg",
