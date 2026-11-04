@@ -5,7 +5,7 @@
  *
  * Keep CACHE_VERSION in sync with the one in index.html.
  */
-var CACHE_VERSION = 'v1.5';
+var CACHE_VERSION = 'v1.6';
 var CACHE = 'undertale-html-' + CACHE_VERSION;
 
 /* Immutable game data - cache-first (never changes unless you bump the version). */
@@ -284,9 +284,13 @@ self.addEventListener('fetch', function (event) {
   if (!isShell && !isGame) return;               /* everything else: straight to network */
 
   if (isShell) {
-    /* network-first: updates apply, cache saves us offline */
+    /* network-first: updates apply, cache saves us offline.
+       v1.6: bypass the browser HTTP cache when revalidating shell files -
+       a stale index.js/savesync.js (GitHub Pages sends max-age=600) made
+       players run old save code for up to 10 minutes after a deploy, which
+       looked exactly like "the save fix didn't work". */
     event.respondWith(
-      fetch(req).then(function (resp) {
+      fetch(req, { cache: 'no-cache' }).then(function (resp) {
         if (resp && resp.ok) {
           var clone = resp.clone();
           caches.open(CACHE).then(function (c) { c.put(req, clone); });

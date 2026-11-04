@@ -47,9 +47,44 @@
         if (!db.objectStoreNames.contains("FILE_DATA")) db.createObjectStore("FILE_DATA");
       };
       req.onsuccess = function (e) { resolve(e.target.result); };
-      req.onerror = function () { reject(req.error); };
+      /* v1.6: never hard-fail on a version clash - fall back to a version-less
+         open (see the inline polyfill in index.html for the full story). */
+      req.onerror = function () {
+        if (req.error && req.error.name === "VersionError") {
+          var req2;
+          try { req2 = indexedDB.open("/_savedata"); }
+          catch (e2) { reject(e2); return; }
+          req2.onsuccess = function (e2) { resolve(e2.target.result); };
+          req2.onerror = function () { reject(req2.error); };
+        } else {
+          reject(req.error);
+        }
+      };
       req.onblocked = function () { reject(new Error("db blocked")); };
     });
+  }
+
+  /* v1.6: heal type-lost contents (plain numeric-key objects -> Uint8Array) */
+  function saneNode(node) {
+    if (!node || typeof node !== "object") return node;
+    var c = node.contents;
+    if (c instanceof Uint8Array || c instanceof ArrayBuffer || typeof c === "string" || c == null) return node;
+    if (ArrayBuffer.isView(c)) return node;
+    if (typeof c === "object") {
+      var vals = Object.values(c);
+      var bad = false;
+      for (var i = 0; i < vals.length; i++) {
+        var v = vals[i];
+        if (typeof v !== "number" || v < 0 || v > 255 || Math.floor(v) !== v) { bad = true; break; }
+      }
+      return {
+        timestamp: (node.timestamp instanceof Date) ? node.timestamp :
+                    (node.timestamp ? new Date(Number(node.timestamp) || 0) : new Date(0)),
+        mode: typeof node.mode === "number" ? node.mode : 33206,
+        contents: bad ? new Uint8Array(0) : new Uint8Array(vals)
+      };
+    }
+    return node;
   }
 
   function tx(mode, fn) {
@@ -136,10 +171,12 @@
           return tx("readonly", function (st) {
             var r = st.get(norm(key));
             return { __req: r };
+          }).then(function (node) {
+            return node === undefined ? node : saneNode(node);
           });
         },
         put: function (node, key) {
-          var n = toNode(node);
+          var n = saneNode(toNode(node));
           if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
           window.__gsTrace.push("put:" + name + "/" + key + " len=" +
             (n && n.contents ? (n.contents.byteLength !== undefined ? n.contents.byteLength : n.contents.length) : "?"));
@@ -1502,445 +1539,38 @@ function notify_config_change() {
   wallpaper_update_config(JSON.stringify(wallpaperConfig));
 }
 
-/* [ut-backup:start] ==========================================================
+/* [ut-utilextras:start] ======================================================
 
-   DETERMINATION BACKUP  --  Shift+Ctrl+E  (and the pause menu's SAVE STATES)
-   ---------------------------------------------------------
-   One keystroke (or menu action) snapshots the save mirror (every "ut*" key
-   the save-sync maintains) into a tagged backup slot:
+   FULLSCREEN  --  F4 anywhere, and the pause menu's FULLSCREEN option.
+   (v1.6: the DETERMINATION BACKUP module that lived here - save-state
+   snapshots, Shift+Ctrl+E, auto-backup - was removed on request: the
+   game's own saves + BOSS STATES cover the workflow. Leftover backup
+   records from old versions are wiped once so they cannot confuse
+   anything.)
 
-     route state  PACIFIST / NEUTRAL / GENOCIDE (via the game's own murderlv)
-     boss tag     SANS, UNDYNE THE UNDYING, ASGORE, ... checkpoint context
-     stats        name / LV / location, plus the timestamp + size
-
-   Up to 24 slots are kept (auto-backups pruned first). AUTO-BACKUP (on by
-   default, toggle in SAVE STATES) snapshots your save whenever it changes -
-   no menu needed - at most once every 5 minutes.
-
-   Restore copies a slot back over BOTH the localStorage mirror and the
-   GameMaker file system (IndexedDB /_savedata), then prompts a reload.
-   Delete is available from the menu. Backups live under "ut::backup::*"
-   and are never included in later snapshots.
-
-   Console helpers (window.UndertaleBackups): .make() .list() .restore(id)
-   .del(id) .auto(on/off) .toggleFullscreen()
-
-   ========================================================== [ut-backup:end] */
+   ====================================================== [ut-utilextras:end] */
 (function () {
   "use strict";
-  if (window.__utBackupInit) return;
-  window.__utBackupInit = true;
+  if (window.__utExtrasInit) return;
+  window.__utExtrasInit = true;
 
-  var MIRROR_PREFIX = "ut";
-  /* NOTE: the prefix deliberately does NOT start with "ut" - the save-sync
-     imports every "ut*" localStorage key into the GameMaker file system
-     (IndexedDB /_savedata), and a backup record there is not a valid file
-     node, which crashes the runner's IDBFS mount at boot (flaky "EXCEPTION
-     THROWN"). The old "ut::backup::*" records are migrated away at load. */
-  var BACKUP_PREFIX = "soulstate::";
-  var AUTO_KEY = "soulstate::auto";
-  var AUTO_EVERY_MS = 5 * 60 * 1000;
-  var MAX_BACKUPS = 24;
-  var MAX_AUTO_KEPT = 12;
-
-  /* ---------- flavor text ---------- */
-  var FLAVOR_SAVED = [
-    "(Knowing your progress is safe fills you with determination.)",
-    "(A safe copy of your file exists now. It fills you with determination.)",
-    "(Somewhere, a little star is keeping watch over your data.)",
-    "(You feel your save data being cradled gently. You are filled with determination.)",
-    "(You are filled with determination.)"
-  ];
-  var FLAVOR_EMPTY = [
-    "(Nothing has been saved yet. But you are still filled with determination.)",
-    "(You feel like this journey has only just begun.)"
-  ];
-  var FLAVOR_FAIL = ["(The backup box is full. Your determination persists anyway.)"];
-
-  function pick(l) { return l[Math.floor(Math.random() * l.length)]; }
-
-  /* ---------- one-time migration / cleanup ----------
-     v1.2-era backups lived under "ut::backup::*" and the save-sync imported
-     them into the game's file system, where they can crash the IDBFS mount.
-     Move the records to the new prefix and delete the imported copies. */
-  (function migrate() {
-    var OLD = "ut::backup::", moved = 0;
-    try {
-      var keys = [];
-      for (var i = 0; i < localStorage.length; i++) {
-        var k = localStorage.key(i);
-        if (k && k.indexOf(OLD) === 0) keys.push(k);
-      }
-      for (var j = 0; j < keys.length; j++) {
-        var kk = keys[j];
-        if (kk === OLD + "auto") {
-          if (localStorage.getItem(AUTO_KEY) === null) {
-            localStorage.setItem(AUTO_KEY, localStorage.getItem(kk));
-          }
-        } else {
-          var nk = BACKUP_PREFIX + kk.slice(OLD.length);
-          if (localStorage.getItem(nk) === null) localStorage.setItem(nk, localStorage.getItem(kk));
-          moved++;
-        }
-        localStorage.removeItem(kk);
-      }
-    } catch (e) {}
-    /* the IndexedDB junk purge is NOT done here: opening /_savedata at page
-       load races the runner's own IDBFS mount (cached boots run at ~2 s) and
-       can abort it -> "EXCEPTION THROWN". It runs lazily post-boot instead. */
-    if (moved) console.log("[UndertaleBackups] migrated " + moved + " old backup records to " + BACKUP_PREFIX);
-  })();
-
-  /* ---------- snapshot / restore ---------- */
-  function collectMirror() {
-    var out = {}, files = 0, chars = 0;
+  /* one-time cleanup of pre-v1.6 backup records */
+  try {
+    var stale = [];
     for (var i = 0; i < localStorage.length; i++) {
       var k = localStorage.key(i);
-      if (!k || k.indexOf(MIRROR_PREFIX) !== 0) continue;
-      if (k.indexOf("ut::") === 0) continue;
-      var v = localStorage.getItem(k);
-      out[k] = v;
-      files++;
-      chars += k.length + (v ? v.length : 0);
+      if (k && (k.indexOf("soulstate::") === 0 || k.indexOf("ut::backup::") === 0)) stale.push(k);
     }
-    return { data: out, files: files, bytes: chars * 2 };
-  }
+    for (var j = 0; j < stale.length; j++) localStorage.removeItem(stale[j]);
+  } catch (e) {}
 
-  function metaOfNow() {
-    if (!window.UTSaveInfo) return null;
-    var info = window.UTSaveInfo.parse();
-    if (!info) return null;
-    return {
-      name: info.name, lv: info.lv, kills: info.kills, xp: info.xp,
-      room: info.room, roomName: info.roomName, area: info.area,
-      route: info.route, boss: info.boss, murderlv: info.murderlv,
-      playTime: info.time
-    };
-  }
-
-  function backupIds() {
-    var ids = [];
-    for (var i = 0; i < localStorage.length; i++) {
-      var k = localStorage.key(i);
-      if (k && k.indexOf(BACKUP_PREFIX) === 0) {
-        var id = Number(k.substring(BACKUP_PREFIX.length));
-        if (!isNaN(id) && id > 0) ids.push(id);
-      }
-    }
-    ids.sort(function (a, b) { return b - a; });
-    return ids;
-  }
-
-  function readRecord(id) {
-    try { return JSON.parse(localStorage.getItem(BACKUP_PREFIX + id)); }
-    catch (e) { return null; }
-  }
-
-  /* deletion order: the OLDEST AUTO slots first (the newest MAX_AUTO_KEPT
-     autos stay protected when possible - they are the recent safety net),
-     then the oldest manual states */
-  function prune() {
-    var ids = backupIds();
-    if (ids.length <= MAX_BACKUPS) return;
-    var recs = [];
-    for (var i = 0; i < ids.length; i++) {
-      var r = readRecord(ids[i]);
-      recs.push({ id: ids[i], t: r ? r.t : ids[i], auto: r ? !!r.auto : false });
-    }
-    recs.sort(function (a, b) {
-      if (a.auto !== b.auto) return a.auto ? -1 : 1;   /* autos first  */
-      return a.t - b.t;                                 /* oldest first */
-    });
-    var excess = ids.length - MAX_BACKUPS;
-    var autoTotal = 0;
-    for (var j = 0; j < recs.length; j++) if (recs[j].auto) autoTotal++;
-    var removed = 0, seenAuto = 0;
-    for (var d = 0; d < recs.length && removed < excess; d++) {
-      var r2 = recs[d];
-      if (r2.auto) {
-        seenAuto++;
-        if (autoTotal - seenAuto < MAX_AUTO_KEPT) continue;  /* newest autos stay */
-      }
-      localStorage.removeItem(BACKUP_PREFIX + r2.id);
-      removed++;
-    }
-  }
-
-  function makeBackup(opts) {
-    opts = opts || {};
-    purgeIdbJunk();
-    var snap = collectMirror();
-    if (snap.files === 0) {
-      return { ok: true, empty: true, files: 0, bytes: 0, slot: backupIds().length };
-    }
-    var id = Date.now();
-    var record = {
-      t: id, files: snap.files, bytes: snap.bytes,
-      data: snap.data, meta: metaOfNow(), auto: !!opts.auto
-    };
-    try {
-      localStorage.setItem(BACKUP_PREFIX + id, JSON.stringify(record));
-    } catch (e) {
-      return { ok: false, files: snap.files, bytes: snap.bytes, slot: backupIds().length };
-    }
-    prune();
-    return {
-      ok: true, empty: false, files: snap.files, bytes: snap.bytes,
-      slot: backupIds().length, meta: record.meta, id: id
-    };
-  }
-
-  /* ---------- IndexedDB (GameMaker file system) writes ---------- */
-  function idbPutNode(key, text, tsMs) {
-    return new Promise(function (resolve) {
-      var bytes;
-      try { bytes = new TextEncoder().encode(text); }
-      catch (e) {
-        var s = unescape(encodeURIComponent(text));
-        var arr = new Uint8Array(s.length);
-        for (var i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
-        bytes = arr;
-      }
-      /* IMPORTANT: contents must be a Uint8Array, NOT a bare ArrayBuffer.
-         The runner's IDBFS load path accepts only typed arrays - a bare
-         ArrayBuffer makes the file load as EMPTY and the next syncfs
-         clobbers it (the runner stores Uint8Array, see its own nodes). */
-      var node = { timestamp: tsMs ? new Date(tsMs) : new Date(), mode: 33206, contents: bytes };
-      var req;
-      try { req = indexedDB.open("/_savedata"); }
-      catch (e) { resolve(false); return; }
-      req.onsuccess = function (e) {
-        try {
-          var db = e.target.result;
-          var tx = db.transaction(["FILE_DATA"], "readwrite");
-          tx.objectStore("FILE_DATA").put(node, key);
-          tx.oncomplete = function () { resolve(true); db.close(); };
-          tx.onerror = function () { resolve(false); db.close(); };
-        } catch (er) { resolve(false); }
-      };
-      req.onerror = function () { resolve(false); };
-    });
-  }
-
-  function mirrorToIdbKey(k) {
-    if (k.indexOf("ut/_savedata/") === 0) return k.slice(2);          /* /_savedata/x   */
-    if (k.length > 2 && k.indexOf("ut") === 0 && k.indexOf("/") > 2) return null; /* not a flat game file */
-    var name = k.slice(2);
-    return /^[\w.\-]+$/.test(name) ? "/_savedata/" + name : null;
-  }
-
-  /* pull the embedded "DATE:<ms>" out of a serialized mirror value, so the
-     IDB copy of a restored file carries the same clock as its mirror */
-  function mirrorTimestamp(raw) {
-    try {
-      var m = /"timestamp":"DATE:(\d+)"/.exec(String(raw));
-      if (m) return Number(m[1]);
-    } catch (e) {}
-    return Date.now();
-  }
-
-  function restoreBackup(id) {
-    var raw = readRecord(id);
-    if (!raw || !raw.data) return { ok: false, n: 0, done: Promise.resolve(false) };
-    var n = 0, idbJobs = [];
-    for (var k in raw.data) {
-      if (!Object.prototype.hasOwnProperty.call(raw.data, k)) continue;
-      var val = raw.data[k];
-      localStorage.setItem(k, val);
-      n++;
-      var idbKey = mirrorToIdbKey(k);
-      if (idbKey && window.UTSaveInfo) {
-        var txt = window.UTSaveInfo.decodeMirror(val);
-        if (typeof txt === "string") {
-          idbJobs.push(idbPutNode(idbKey, txt, mirrorTimestamp(val)));
-          try { localStorage.setItem(k + "::ts", String(mirrorTimestamp(val))); } catch (e2) {}
-        }
-      }
-    }
-    return { ok: true, n: n, done: Promise.all(idbJobs).then(function () { return true; }) };
-  }
-
-  function deleteBackup(id) {
-    localStorage.removeItem(BACKUP_PREFIX + id);
-    return true;
-  }
-
-  /* ---------- auto-backup ---------- */
-  function autoEnabled() {
-    var v = localStorage.getItem(AUTO_KEY);
-    return v === null ? true : v === "1";
-  }
-  function setAuto(on) { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); }
-
-  var lastAutoAt = 0, lastSig = null;
-  function mirrorSignature() {
-    var h = 0, s = "";
-    for (var i = 0; i < localStorage.length; i++) {
-      var k = localStorage.key(i);
-      if (!k || k.indexOf("ut/_savedata/") !== 0) continue;
-      if (k.indexOf("::") >= 0) continue;
-      s += k + "\u0001" + (localStorage.getItem(k) || "") + "\u0002";
-    }
-    for (var j = 0; j < s.length; j++) {
-      h = (h * 31 + s.charCodeAt(j)) | 0;
-    }
-    return h;
-  }
-
-  setInterval(function () {
-    if (!autoEnabled()) return;
-    var sig = mirrorSignature();
-    if (sig !== lastSig) {
-      if (lastSig !== null && Date.now() - lastAutoAt >= AUTO_EVERY_MS && sig !== 0) {
-        lastAutoAt = Date.now();
-        makeBackup({ auto: true });
-      }
-      lastSig = sig;
-    }
-  }, 15000);
-  lastSig = mirrorSignature();
-  window.addEventListener("beforeunload", function () {
-    /* a save that changed in the final seconds still gets caught */
-    if (!autoEnabled()) return;
-    var sig = mirrorSignature();
-    if (sig !== lastSig && Date.now() - lastAutoAt >= AUTO_EVERY_MS && sig !== 0) {
-      makeBackup({ auto: true });
-    }
-  });
-
-  /* ---------- lazy IndexedDB junk purge (post-boot only) ----------
-     removes any non-file-node junk the save-sync may have imported in older
-     builds; guarded so it runs at most once per storage generation. */
-  var idbPurgeDone = false;
-  function purgeIdbJunk() {
-    if (idbPurgeDone) return;
-    idbPurgeDone = true;
-    try {
-      var req = indexedDB.open("/_savedata");
-      req.onsuccess = function (e) {
-        var db = e.target.result;
-        try {
-          var tx = db.transaction(["FILE_DATA"], "readwrite");
-          var st = tx.objectStore("FILE_DATA");
-          var cur = st.openCursor(), junk = [];
-          cur.onsuccess = function (ev) {
-            var c = ev.target.result;
-            if (!c) { for (var d = 0; d < junk.length; d++) st.delete(junk[d]); db.close(); return; }
-            if (typeof c.value !== "object" || c.value === null || !c.value.timestamp) {
-              if (String(c.key).indexOf(":") >= 0 || String(c.key).indexOf("backup") >= 0) junk.push(c.key);
-            }
-            c.continue();
-          };
-        } catch (er) { try { db.close(); } catch (e2) {} }
-      };
-    } catch (e2) {}
-  }
-
-  /* ---------- overlay ---------- */
-  var overlay = null, flavorEl = null, metaEl = null, titleEl = null, hideTimer = -1;
-
-  function buildOverlay() {
-    if (overlay) return;
-    var box = document.createElement("div");
-    box.id = "utBackupOverlay";
-    var star = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    star.setAttribute("viewBox", "0 0 24 24");
-    star.setAttribute("width", "26");
-    star.setAttribute("height", "26");
-    star.setAttribute("class", "utb-star");
-    star.setAttribute("aria-hidden", "true");
-    var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M12 0 L14.8 9.2 L24 12 L14.8 14.8 L12 24 L9.2 14.8 L0 12 L9.2 9.2 Z");
-    path.setAttribute("fill", "#fff200");
-    star.appendChild(path);
-    titleEl = document.createElement("div");
-    titleEl.className = "utb-title";
-    flavorEl = document.createElement("div");
-    flavorEl.className = "utb-flavor";
-    metaEl = document.createElement("div");
-    metaEl.className = "utb-meta";
-    box.appendChild(star);
-    box.appendChild(titleEl);
-    box.appendChild(flavorEl);
-    box.appendChild(metaEl);
-    var style = document.createElement("style");
-    style.textContent =
-      "#utBackupOverlay{position:fixed;left:50%;bottom:14vh;transform:translate(-50%,0);" +
-      "background:#000;border:3px solid #fff;box-shadow:0 0 0 3px #000, inset 0 0 0 1px #000;" +
-      "padding:14px 22px 12px;text-align:center;z-index:99999;pointer-events:none;" +
-      "font-family:'Courier New','Lucida Console',Monaco,monospace;color:#fff;" +
-      "max-width:min(82vw,480px);opacity:0;transition:opacity .18s steps(3,end);}" +
-      "#utBackupOverlay.utb-show{opacity:1;}" +
-      "#utBackupOverlay .utb-star{animation:utb-spin 2.4s linear infinite;margin:0 auto 6px;}" +
-      "#utBackupOverlay .utb-title{font-size:15px;letter-spacing:3px;margin-bottom:8px;}" +
-      "#utBackupOverlay .utb-flavor{font-size:13px;line-height:1.55;}" +
-      "#utBackupOverlay .utb-meta{font-size:11px;color:#9c9c9c;margin-top:8px;letter-spacing:1px;}" +
-      "@keyframes utb-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}" +
-      "@media (prefers-reduced-motion:reduce){#utBackupOverlay .utb-star{animation:none;}}";
-    document.head.appendChild(style);
-    document.body.appendChild(box);
-    overlay = box;
-  }
-
-  function fmtBytes(n) {
-    if (n < 1024) return n + " B";
-    if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
-    return (n / 1048576).toFixed(1) + " MB";
-  }
-
-  function metaLine(m) {
-    if (!m) return "";
-    var parts = [];
-    parts.push(m.route || "?");
-    if (m.boss) parts.push(m.boss);
-    parts.push("LV " + (m.lv || 1));
-    if (m.area) parts.push(m.area);
-    return parts.join("  \u00b7  ");
-  }
-
-  function showOverlay(result) {
-    buildOverlay();
-    var line, title, meta;
-    if (!result.ok) {
-      title = "DETERMINATION";
-      line = pick(FLAVOR_FAIL);
-      meta = "backup failed";
-    } else if (result.empty) {
-      title = "DETERMINATION";
-      line = pick(FLAVOR_EMPTY);
-      meta = "no save data yet";
-    } else {
-      title = "BACKUP SAVED";
-      line = pick(FLAVOR_SAVED);
-      meta = metaLine(result.meta) + "  \u00b7  " +
-             new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) +
-             "  \u00b7  " + fmtBytes(result.bytes);
-    }
-    titleEl.textContent = title;
-    flavorEl.textContent = "* " + line;
-    metaEl.textContent = meta;
-    overlay.classList.add("utb-show");
-    if (hideTimer !== -1) clearTimeout(hideTimer);
-    hideTimer = setTimeout(function () {
-      hideTimer = -1;
-      overlay.classList.remove("utb-show");
-    }, 3200);
-  }
-
-  function triggerBackup() {
-    var result = makeBackup();
-    showOverlay(result);
-    return result;
-  }
-
-  /* ---------- fullscreen (F4) + keyboard lock ---------- */
   function fullscreenElement() {
     return document.fullscreenElement || document.webkitFullscreenElement || null;
   }
   function lockReservedKeys() {
     try {
       if (navigator.keyboard && navigator.keyboard.lock) {
-        var p = navigator.keyboard.lock(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "KeyE"]);
+        var p = navigator.keyboard.lock(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"]);
         if (p && p.catch) p.catch(function () {});
       }
     } catch (e) {}
@@ -1969,59 +1599,17 @@ function notify_config_change() {
   document.addEventListener("fullscreenchange", function () { if (!fullscreenElement()) unlockReservedKeys(); });
   document.addEventListener("webkitfullscreenchange", function () { if (!fullscreenElement()) unlockReservedKeys(); });
 
-  /* ---------- keys ---------- */
   window.addEventListener("keydown", function (e) {
     if (e.repeat) return;
     if (e.key === "F4" || e.code === "F4") {
       e.preventDefault();
       toggleFullscreen();
-      return;
-    }
-    var isE = e.code === "KeyE" || (typeof e.key === "string" && e.key.toLowerCase() === "e");
-    if (e.ctrlKey && e.shiftKey && isE) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      triggerBackup();
     }
   }, true);
 
-  /* ---------- console helpers ---------- */
-  function listBackups() {
-    return backupIds().map(function (id) {
-      var r = readRecord(id);
-      return {
-        id: id,
-        when: new Date(id).toLocaleString(),
-        files: r ? r.files : "?",
-        bytes: r ? r.bytes : "?",
-        auto: r ? !!r.auto : false,
-        meta: r ? r.meta : null
-      };
-    });
-  }
-
-  function restoreAndReport(id) {
-    var res = restoreBackup(id);
-    if (res.ok) {
-      res.done.then(function () {
-        console.log("[UndertaleBackups] restored " + res.n + " keys from " + new Date(id).toLocaleString() +
-                    " - reload the page to pick them up.");
-      });
-    }
-    return res;
-  }
-
-  window.UndertaleBackups = {
-    make: triggerBackup,
-    list: listBackups,
-    restore: restoreAndReport,
-    del: deleteBackup,
-    auto: function (on) { if (arguments.length) setAuto(!!on); return autoEnabled(); },
-    toggleFullscreen: toggleFullscreen
-  };
+  window.UTFullscreen = { toggle: toggleFullscreen };
 })();
-/* [ut-backup v1.2 duplicate removed] */
+
 /* [ut-saveinfo:start] ==========================================================
 
    SAVE INFO  --  reads the live save mirror and derives the route state
@@ -2235,11 +1823,10 @@ function notify_config_change() {
              needs - nothing more, so no story flags are lied about
 
    Selecting one merges the three entries into undertale.sav (the JSON
-   ds_map the game's savedata system uses), writes it to BOTH the
-   localStorage mirror and the GameMaker file system (IndexedDB), waits
-   for the writes to land, then reloads. CONTINUE then starts at the
-   boss. Your previous file is NOT kept - make a backup first (or use
-   Shift+Ctrl+E, which now warns in the menu).
+   ds_map the game's savedata system uses), writes it through the SAME
+   gameStorage client the runner uses (plus the localStorage mirror the
+   menu reads), awaits the IndexedDB transaction, then reloads. CONTINUE
+   then starts at the boss. Your previous file is NOT kept.
 
    Console: window.UTBossStates.load('sans')  -  returns a Promise.
 
@@ -2411,16 +1998,29 @@ function notify_config_change() {
   }
 
   function idbPut(key, text, tsMs) {
+    /* v1.6: write through window.oprt.gameStorage - the SAME client the
+       runner uses for its own saves - so there is exactly one writer with
+       one node format for /_savedata. (The raw indexedDB.open fallback
+       remains for exotic embeds without the polyfill.) */
+    var bytes;
+    try { bytes = new TextEncoder().encode(text); }
+    catch (e) {
+      var s = unescape(encodeURIComponent(text));
+      var arr = new Uint8Array(s.length);
+      for (var i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
+      bytes = arr;
+    }
+    var node = { timestamp: new Date(tsMs || Date.now()), mode: 33206, contents: bytes };
+    if (window.oprt && window.oprt.gameStorage) {
+      var st = window.oprt.gameStorage.open("/_savedata");
+      return Promise.resolve(st.put(node, key)).then(function () { return true; },
+        function () { return rawPut(node, key); });
+    }
+    return rawPut(node, key);
+  }
+
+  function rawPut(node, key) {
     return new Promise(function (resolve) {
-      var bytes;
-      try { bytes = new TextEncoder().encode(text); }
-      catch (e) {
-        var s = unescape(encodeURIComponent(text));
-        var arr = new Uint8Array(s.length);
-        for (var i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i);
-        bytes = arr;
-      }
-      var node = { timestamp: new Date(tsMs), mode: 33206, contents: bytes };
       var req;
       try { req = indexedDB.open("/_savedata"); }
       catch (e) { resolve(false); return; }
@@ -2517,31 +2117,33 @@ function notify_config_change() {
 
 /* [ut-pausemenu:start] ==========================================================
 
-   PAUSE MENU  -  built into the game, drawn like the game
+   PAUSE MENU  -  drawn with the game's own assets (v1.6)
    ---------------------------------------------------------
    Esc pauses the engine for real (GM_pause) and renders this menu on a
-   640x480 canvas overlay that sits exactly on top of the game canvas - so
-   it shares the game's pixel grid and scale. Everything is drawn with an
-   embedded 5x7 pixel font, the SOUL is the cursor, selected entries turn
-   yellow - the same visual language as the in-game menus.
+   640x480 canvas overlay pinned exactly on top of the game canvas, so it
+   shares the game's pixel grid and scale.
+
+   TEXT: real in-game font. fnt_maintext (Determination Mono) was extracted
+   from game.unx itself (FONT chunk + its texture atlas) and is embedded
+   below as UTFONT; glyphs are tinted per color and blitted from the atlas,
+   exactly like GameMaker blits them. The SOUL cursor is the game's heart.
 
      RESUME       back to the game
      BOSS STATES  skip straight to any fight: TORIEL, PAPYRUS, UNDYNE,
                   UNDYNE THE UNDYING, METTATON EX, METTATON NEO, ASGORE,
                   SANS. Each state is a crafted save - right stats, gear,
-                  inventory and route flags - written to file0/file9 and
-                  the undertale.ini, then the game reloads. CONTINUE then
-                  starts a few steps from the fight.
-     MY BACKUPS   snapshots of your own file, tagged with route
-                  (PACIFIST / NEUTRAL / GENOCIDE) and boss checkpoint
-                  (SANS, UNDYNE THE UNDYING, ASGORE, ...). Filter by route,
-                  make states, restore, delete, toggle AUTO-BACKUP.
+                  inventory and route flags - written through the same
+                  gameStorage the runner uses, then the page reloads and
+                  CONTINUE starts at the fight.
      FULLSCREEN   same as F4
      QUIT         back to the loading screen
 
    Keyboard: arrows (or WASD) select, Z/ENTER confirm, X/ESC back. Mouse
-   works too. While open, game keys are swallowed. GX Mobile's window.pause()
+   works too. While open, game keys are swallowed. GX Mobile's pause()
    opens the same menu.
+
+   (v1.6: MY BACKUPS / save-state snapshots were removed - the game's own
+   saves now persist reliably, which is what they were papering over.)
 
    ========================================================== [ut-pausemenu:end] */
 (function () {
@@ -2549,23 +2151,123 @@ function notify_config_change() {
   if (window.__utMenuInit) return;
   window.__utMenuInit = true;
 
-  /* 5x7 pixel font (rows are 5-bit masks, MSB = leftmost pixel) */
-  var FONT = {32:[0,0,0,0,0,0,0],33:[28,28,28,28,28,0,28],34:[30,22,22,22,22,22,22],35:[2,0,30,8,30,0,0],36:[12,14,24,14,2,30,12],37:[26,20,28,4,6,15,22],38:[12,14,12,26,22,22,30],39:[28,28,28,28,28,28,28],40:[7,14,28,28,28,14,7],41:[14,7,3,3,3,7,14],42:[12,12,30,30,12,14,22],43:[4,4,4,31,4,4,4],44:[15,15,31,31,28,28,28],45:[31,31,31,31,31,31,31],46:[28,28,28,28,28,28,28],47:[1,2,2,4,4,8,8],48:[14,9,25,29,25,9,14],49:[6,14,6,6,6,6,15],50:[14,9,3,2,4,8,31],51:[14,9,3,6,1,25,14],52:[2,6,10,10,31,2,2],53:[15,8,14,1,1,25,14],54:[15,8,14,25,9,9,14],55:[15,2,2,6,4,4,4],56:[14,9,11,14,25,25,14],57:[14,11,25,9,15,3,14],58:[30,24,0,0,0,24,30],59:[14,0,0,0,14,14,28],60:[3,7,12,24,12,7,3],61:[31,15,0,0,0,15,31],62:[24,14,7,1,7,14,24],63:[14,25,3,6,4,0,4],64:[14,26,30,26,30,16,12],65:[12,12,14,10,30,18,19],66:[30,26,26,30,26,26,30],67:[14,9,24,24,24,9,14],68:[30,27,25,25,25,27,30],69:[31,24,24,31,24,24,31],70:[15,8,8,15,8,8,8],71:[14,9,24,27,25,9,15],72:[25,25,25,31,25,25,25],73:[15,4,4,4,4,4,15],74:[7,3,3,3,3,10,14],75:[26,30,28,28,30,26,27],76:[16,16,16,16,16,16,31],77:[27,27,31,31,21,17,17],78:[25,25,29,29,27,27,27],79:[14,11,25,25,25,11,14],80:[31,25,25,30,24,24,24],81:[14,25,25,25,11,6,3],82:[30,26,26,30,30,26,26],83:[14,25,8,14,1,25,15],84:[30,12,12,12,12,12,12],85:[25,25,25,25,25,9,14],86:[19,18,26,10,14,12,12],87:[19,19,30,30,30,30,26],88:[26,14,12,12,12,10,18],89:[18,10,14,12,12,12,12],90:[30,6,4,12,8,24,30],91:[14,12,12,12,12,12,14],92:[8,8,4,4,2,2,1],93:[31,3,3,3,3,3,31],94:[6,6,14,14,10,11,9],95:[15,15,15,15,15,15,15],96:[14,14,14,6,7,3,3],123:[15,12,12,24,12,12,15],124:[28,28,28,28,28,28,28],125:[12,4,6,2,4,4,12],126:[28,28,12,15,3,3,3]};
-  var HEART = [0x18c,0x3de,0x7ff,0x7ff,0x7ff,0x3fe,0x1fc,0xf8,0x70,0x20];   /* 11x10 SOUL, row masks */
+/* REAL GAME FONT (fnt_maintext / Determination Mono, extracted from game.unx) */
+/* Real in-game font: fnt_maintext (Determination Mono) extracted from
+   game.unx (FONT chunk + its texture atlas). Glyphs are pre-positioned:
+   draw each at the line top, advance by shift. */
+var UTFONT = {
+  src: "data:image/png;base64,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",
+  w: 256, h: 256,
+  glyphs: (function(){var m={},p="32=79,81,3,16,3,0|33=73,81,4,13,6,1|34=92,81,5,8,6,0|35=60,2,7,13,8,0|36=105,2,6,15,7,0|37=51,2,7,13,8,0|38=78,2,7,13,8,0|39=119,81,2,8,3,0|40=67,81,4,13,5,0|41=55,81,4,13,5,0|42=2,20,8,11,9,0|43=98,66,6,11,7,0|44=103,81,2,15,3,0|45=41,81,6,9,7,0|46=111,81,2,13,3,0|47=20,20,6,14,7,0|48=106,36,6,13,7,0|49=74,36,6,13,7,0|50=58,51,6,13,7,0|51=108,20,6,13,7,0|52=76,20,6,13,7,0|53=66,36,6,13,7,0|54=116,20,6,13,7,0|55=26,36,6,13,7,0|56=66,51,6,13,7,0|57=26,51,6,13,7,0|58=107,81,2,13,3,0|59=99,81,2,15,3,0|60=2,81,5,13,6,0|61=33,81,6,10,7,0|62=106,66,5,13,6,0|63=114,51,6,13,7,0|64=106,51,6,13,7,0|65=2,36,6,13,7,0|66=92,20,6,13,7,0|67=34,36,6,13,7,0|68=2,66,6,13,7,0|69=34,66,6,13,7,0|70=26,66,6,13,7,0|71=100,20,6,13,7,0|72=2,51,6,13,7,0|73=36,20,6,13,7,0|74=82,36,6,13,7,0|75=98,36,6,13,7,0|76=50,66,6,13,7,0|77=87,2,7,13,8,0|78=60,20,6,13,7,0|79=18,51,6,13,7,0|80=34,51,6,13,7,0|81=113,2,6,15,7,0|82=114,36,6,13,7,0|83=42,66,6,13,7,0|84=90,36,6,13,7,0|85=42,51,6,13,7,0|86=10,66,6,13,7,0|87=42,2,7,13,8,0|88=28,20,6,13,7,0|89=18,66,6,13,7,0|90=90,66,6,13,7,0|91=61,81,4,13,5,0|92=12,20,6,14,7,0|93=49,81,4,13,5,0|94=84,81,6,7,7,0|95=9,81,4,16,5,0|96=2,99,3,5,4,0|97=10,51,6,13,7,0|98=98,51,6,13,7,0|99=68,20,6,13,7,0|100=66,66,6,13,7,0|101=42,36,6,13,7,0|102=50,36,6,13,7,0|103=2,2,6,16,7,0|104=52,20,6,13,7,0|105=74,51,6,13,7,0|106=18,2,6,16,7,0|107=82,66,6,13,7,0|108=50,51,6,13,7,0|109=69,2,7,13,8,0|110=10,36,6,13,7,0|111=44,20,6,13,7,0|112=34,2,6,16,7,0|113=26,2,6,16,7,0|114=74,66,6,13,7,0|115=90,51,6,13,7,0|116=18,36,6,13,7,0|117=58,66,6,13,7,0|118=58,36,6,13,7,0|119=96,2,7,13,8,0|120=84,20,6,13,7,0|121=10,2,6,16,7,0|122=82,51,6,13,7,0|123=120,66,5,13,6,0|124=115,81,2,13,3,0|125=113,66,5,13,6,0|126=24,81,7,9,8,0".split("|");
+    for(var i=0;i<p.length;i++){var kv=p[i].split("="),v=kv[1].split(",");
+      m[+kv[0]]=[+v[0],+v[1],+v[2],+v[3],+v[4],+v[5]];}
+    return m;})()
+};
+
+  var HEART = [0x18c, 0x3de, 0x7ff, 0x7ff, 0x7ff, 0x3fe, 0x1fc, 0xf8, 0x70, 0x20];  /* 11x10 SOUL */
 
   var W = 640, H = 480;
   var canvas = null, ctx = null, raf = -1;
 
   var S = {
-    open: false, mode: "main",       /* main | boss | states | confirm */
-    sel: 0, tab: 0, scroll: 0,
+    open: false, mode: "main",        /* main | boss | confirm */
+    sel: 0,
     bossSel: 0, bossScroll: 0,
-    confirm: null,                   /* {kind, id, yes} */
-    slots: [], info: null, tick: 0
+    confirm: null,                    /* {kind, boss, yes} */
+    info: null, tick: 0
   };
-  var TABS = ["ALL", "PACIFIST", "NEUTRAL", "GENOCIDE"];
 
-  /* ---------- canvas plumbing ---------- */
+  /* ---------- font: tinted atlas cache ---------- */
+  var atlasImg = null, tintCache = {};
+  var COL = {
+    white: "#ffffff", sel: "#ffff00", hint: "#7f7f7f",
+    red: "#ff0000", pac: "#00c0ff", gen: "#ff4040", neu: "#ffffff"
+  };
+
+  function loadFont() {
+    if (atlasImg) return;
+    atlasImg = new Image();
+    atlasImg.onload = function () { tintCache = {}; };
+    atlasImg.src = UTFONT.src;
+  }
+
+  function tinted(color) {
+    if (tintCache[color]) return tintCache[color];
+    if (!atlasImg || !atlasImg.complete || !atlasImg.naturalWidth) return null;
+    var c = document.createElement("canvas");
+    c.width = UTFONT.w;
+    c.height = UTFONT.h;
+    var t = c.getContext("2d");
+    t.drawImage(atlasImg, 0, 0);
+    t.globalCompositeOperation = "source-in";
+    t.fillStyle = color;
+    t.fillRect(0, 0, c.width, c.height);
+    tintCache[color] = c;
+    return c;
+  }
+
+  /* draw text with the real font. Glyphs are pre-positioned in the atlas:
+     each glyph draws at the line TOP; advance by its shift. */
+  function text(str, x, y, scale, color) {
+    var src = tinted(color || COL.white);
+    if (!src) return;
+    str = String(str);
+    var pen = x;
+    for (var i = 0; i < str.length; i++) {
+      var code = str.charCodeAt(i);
+      if (code === 10) continue;
+      var g = UTFONT.glyphs[code];
+      if (!g) g = UTFONT.glyphs[63]; /* '?' */
+      if (!g) continue;
+      if (code !== 32) {
+        ctx.drawImage(src, g[0], g[1], g[2], g[3],
+          pen + g[5] * scale, y, g[2] * scale, g[3] * scale);
+      }
+      pen += g[4] * scale;
+    }
+  }
+
+  function textW(str, scale) {
+    str = String(str);
+    var w = 0;
+    for (var i = 0; i < str.length; i++) {
+      var g = UTFONT.glyphs[str.charCodeAt(i)];
+      w += (g ? g[4] : 6) * scale;
+    }
+    return w - (str.length ? scale : 0);
+  }
+
+  function heart(x, y, scale, color) {
+    ctx.fillStyle = color || COL.red;
+    for (var r = 0; r < HEART.length; r++) {
+      var row = HEART[r];
+      for (var c = 0; c < 11; c++) {
+        if (row & (1 << (10 - c))) ctx.fillRect(x + c * scale, y + r * scale, scale, scale);
+      }
+    }
+  }
+
+  /* Undertale dialogue box: black interior, white frame */
+  function box(x, y, w, h) {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x, y, w, 5);
+    ctx.fillRect(x, y + h - 5, w, 5);
+    ctx.fillRect(x, y, 5, h);
+    ctx.fillRect(x + w - 5, y, 5, h);
+  }
+
+  function routeColor(route) {
+    return route === "PACIFIST" ? COL.pac : route === "GENOCIDE" ? COL.gen : COL.neu;
+  }
+
+  /* ---------- data ---------- */
+  function refresh() {
+    S.info = window.UTSaveInfo ? window.UTSaveInfo.parse() : null;
+  }
+
+  /* ---------- canvas plumbing (pinned to the game canvas) ---------- */
   function gameCanvas() {
     return document.querySelector("canvas.emscripten") || document.getElementById("canvas");
   }
@@ -2579,7 +2281,7 @@ function notify_config_change() {
     canvas.height = H;
     canvas.style.cssText =
       "position:fixed;z-index:99998;image-rendering:pixelated;image-rendering:crisp-edges;" +
-      "background:transparent;cursor:default;";
+      "background:transparent;cursor:default;display:none;";
     document.body.appendChild(canvas);
     ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = false;
@@ -2594,243 +2296,124 @@ function notify_config_change() {
     canvas.style.width = r.width + "px";
     canvas.style.height = r.height + "px";
   }
-  /* ---------- pixel drawing ---------- */
-  function px(x, y, w, h, color) {
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, w, h);
-  }
-  function text(str, x, y, scale, color) {
-    str = String(str).toUpperCase();
-    ctx.fillStyle = color;
-    for (var i = 0; i < str.length; i++) {
-      var g = FONT[str.charCodeAt(i)];
-      if (!g) g = FONT[63]; /* '?' */
-      for (var r = 0; r < 7; r++) {
-        var row = g[r];
-        if (!row) continue;
-        for (var c = 0; c < 5; c++) {
-          if (row & (1 << (4 - c))) {
-            ctx.fillRect(x + (i * 6 + c) * scale, y + r * scale, scale, scale);
-          }
-        }
-      }
-    }
-  }
-  function textW(str, scale) { return String(str).length * 6 * scale - scale; }
-  function heart(x, y, scale, color) {
-    ctx.fillStyle = color;
-    for (var r = 0; r < HEART.length; r++) {
-      var row = HEART[r];
-      for (var c = 0; c < 11; c++) {
-        if (row & (1 << (10 - c))) ctx.fillRect(x + c * scale, y + r * scale, scale, scale);
-      }
-    }
-  }
-  function box(x, y, w, h) {
-    px(x, y, w, h, "#fff");            /* white frame      */
-    px(x + 5, y + 5, w - 10, h - 10, "#000"); /* black interior */
-  }
-
-  var COL = { txt: "#ffffff", sel: "#fff200", hint: "#7f7f7f", red: "#ff0000",
-              pac: "#00c0ff", neu: "#ffffff", gen: "#ff4040", auto: "#00ff00" };
-
-  function routeColor(route) {
-    return route === "PACIFIST" ? COL.pac : route === "GENOCIDE" ? COL.gen : COL.neu;
-  }
-
-  /* ---------- data ---------- */
-  function refresh() {
-    S.info = window.UTSaveInfo ? window.UTSaveInfo.parse() : null;
-    var all = window.UndertaleBackups ? window.UndertaleBackups.list() : [];
-    var f = TABS[S.tab];
-    S.slots = f === "ALL" ? all : all.filter(function (s) { return s.meta && s.meta.route === f; });
-    if (S.sel > Math.max(0, S.slots.length)) S.sel = Math.max(0, S.slots.length);
-  }
 
   /* ---------- layout helpers ---------- */
-  var rows = [];   /* hit-test rows: {x,y,w,h,act,sel} rebuilt every frame */
+  var rows = [];   /* hit-test rows rebuilt every frame */
 
-  function menuRow(x, y, label, selected, color, heartOn) {
+  function menuRow(x, y, label, selected, color) {
     var s = 2;
     var w = textW(label, s) + 30;
-    if (heartOn) heart(x + 2, y + 3, 2, COL.red);
-    text(label, x + 32, y, s, color || (selected ? COL.sel : COL.txt));
-    rows.push({ x: x, y: y - 4, w: w + 40, h: 20, act: label, sel: selected });
-    return y + 22;
+    if (selected) heart(x + 2, y + 5, 2, COL.red);
+    text(label, x + 34, y, s, color || (selected ? COL.sel : COL.white));
+    rows.push({ x: x, y: y - 6, w: w + 40, h: 36, act: label, sel: selected });
+    return y + 34;
   }
 
-  function confirmBox(title, sub) {
-    box(140, 170, 360, 130);
-    text(title, 320 - textW(title, 2) / 2, 190, 2, COL.txt);
-    if (sub) text(sub, 320 - textW(sub, 1) / 2, 216, 1, COL.hint);
-    var y = 244;
-    var opts = ["YES", "NO"];
-    S.confirm.yesPos = [];
-    for (var i = 0; i < opts.length; i++) {
-      var x = 245 + i * 90;
-      var on = (S.confirm.yes ? i === 0 : i === 1);
-      if (on) heart(x - 4, y + 2, 2, COL.red);
-      text(opts[i], x + 14, y, 2, on ? COL.sel : COL.txt);
-      rows.push({ x: x - 10, y: y - 6, w: 80, h: 24, act: "confirm" + i, sel: on });
-    }
-  }
-
-  /* ---------- draw ---------- */
+  /* ---------- screens ---------- */
   function drawMain() {
     var info = S.info;
-    /* stats strip (like the in-game menu header) */
     if (info) {
-      text(info.name, 36, 24, 2, COL.txt);
-      text("LV " + info.lv, 36 + textW(info.name, 2) + 24, 24, 2, COL.txt);
-      var hp = "HP " + info.hp + "/" + info.maxhp;
-      text(hp, 36 + textW(info.name, 2) + textW("LV " + info.lv, 2) + 48, 24, 2, COL.txt);
+      var name = info.name || "FRISK";
+      text(name, 36, 14, 2, COL.white);
+      var x2 = 36 + textW(name, 2) + 20;
+      text("LV " + info.lv, x2, 14, 2, COL.white);
+      text("HP " + info.hp + "/" + info.maxhp, x2 + textW("LV " + info.lv, 2) + 20, 14, 2, COL.white);
       var badge = info.route;
-      var bx = W - 36 - textW(badge, 2);
-      text(badge, bx, 24, 2, routeColor(info.route));
-      var loc = (info.boss ? info.boss + "  -  " : "") + info.area;
-      text(loc, 36, 46, 1, COL.hint);
+      text(badge, W - 36 - textW(badge, 2), 14, 2, routeColor(info.route));
+      var loc = (info.boss ? info.boss + " - " : "") + info.area;
+      text(loc, 36, 48, 1, COL.hint);
     }
 
-    box(32, 84, 576, 262);
-    text("PAUSED", 320 - textW("PAUSED", 3) / 2, 104, 3, COL.txt);
+    box(32, 84, 576, 246);
+    var title = "PAUSED";
+    text(title, 320 - textW(title, 3) / 2, 106, 3, COL.white);
 
-    var items = ["RESUME", "BOSS STATES", "MY BACKUPS", "FULLSCREEN", "QUIT"];
-    var y = 138;
+    var items = ["RESUME", "BOSS STATES", "FULLSCREEN", "QUIT"];
+    var y = 152;
     for (var i = 0; i < items.length; i++) {
-      y = menuRow(84, y, items[i], S.sel === i) + 6;
+      y = menuRow(96, y, items[i], S.sel === i);
     }
-    text("\u2191\u2193 SELECT   Z CONFIRM   X RESUME", 320 - textW("\u2191\u2193 SELECT   Z CONFIRM   X RESUME", 1) / 2, 368, 1, COL.hint);
+
+    var hint = "ARROWS: SELECT   Z: CONFIRM   X: RESUME";
+    text(hint, 320 - textW(hint, 1) / 2, 396, 1, COL.hint);
   }
 
-  /* ---------- BOSS STATES screen: skip straight to a fight ---------- */
   function bossList() {
     return window.UTBossStates ? window.UTBossStates.list : [];
   }
 
   function drawBoss() {
-    text("BOSS STATES", 36, 20, 2, COL.txt);
-    var bl = bossList();
+    text("BOSS STATES", 36, 14, 2, COL.white);
     var hint0 = "SKIP STRAIGHT TO A FIGHT - REPLACES YOUR FILE";
-    text(hint0, W - 36 - textW(hint0, 1), 20, 1, COL.hint);
+    text(hint0, W - 36 - textW(hint0, 1), 16, 1, COL.hint);
 
-    box(32, 60, 576, 344);
+    box(32, 56, 576, 300);
 
+    var bl = bossList();
     var visible = Math.min(bl.length, 7);
     if (S.bossScroll > bl.length - visible) S.bossScroll = Math.max(0, bl.length - visible);
-    var y = 84;
+    var y = 82;
     for (var r = 0; r < visible; r++) {
       var idx = S.bossScroll + r;
       var b = bl[idx];
       if (!b) break;
       var sel = S.bossSel === idx;
-      if (sel) heart(58, y + 3, 2, COL.red);
+      if (sel) heart(58, y + 5, 2, COL.red);
       var rc = routeColor(b.route);
-      text(b.route.slice(0, 3), 84, y, 2, rc);
-      text(b.name, 84 + textW("GEN", 2) + 14, y, 2, sel ? COL.sel : COL.txt);
-      var lvTxt = "LV" + b.lv;
-      text(lvTxt, 420, y, 2, sel ? COL.sel : COL.txt);
-      rows.push({ x: 52, y: y - 4, w: 460, h: 22, act: "boss" + idx, sel: sel });
-      y += 26;
+      text(b.route.slice(0, 3), 92, y, 2, rc);
+      text(b.name, 92 + textW("GEN", 2) + 20, y, 2, sel ? COL.sel : COL.white);
+      var lvTxt = "LV " + b.lv;
+      text(lvTxt, 480 - textW(lvTxt, 2), y, 2, sel ? COL.sel : COL.white);
+      rows.push({ x: 52, y: y - 6, w: 490, h: 36, act: "boss" + idx, sel: sel });
+      y += 34;
     }
-    /* selected boss detail line */
+
     var cur = bl[S.bossSel];
     if (cur) {
-      var d = cur.sub + "   " + (cur.route === "GENOCIDE" ? "GENOCIDE ROUTE" : cur.route === "PACIFIST" ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
-      text(d.slice(0, 66), 58, 360, 1, COL.hint);
+      var d = cur.sub + "   " + (cur.route === "GENOCIDE" ? "GENOCIDE ROUTE"
+        : cur.route === "PACIFIST" ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
+      text(d.slice(0, 62), 58, 340, 1, COL.hint);
     }
     if (bl.length > 7) {
-      var sc = "MORE " + (bl.length - (S.bossScroll + visible));
-      if (bl.length - (S.bossScroll + visible) > 0) text(sc, 320 - textW(sc, 1) / 2, 360, 1, COL.hint);
+      var more = bl.length - (S.bossScroll + visible);
+      if (more > 0) {
+        var sc = "MORE " + more;
+        text(sc, W - 40 - textW(sc, 1), 322, 1, COL.hint);
+      }
     }
-    var hint = "\u2191\u2193 SELECT   Z SKIP TO BOSS   X BACK";
-    text(hint, 320 - textW(hint, 1) / 2, 414, 1, COL.hint);
-    text("TIP - SHIFT CTRL E BACKS UP YOUR FILE FIRST", 320 - textW("TIP - SHIFT CTRL E BACKS UP YOUR FILE FIRST", 1) / 2, 428, 1, COL.hint);
+    var hint = "ARROWS: SELECT   Z: SKIP TO BOSS   X: BACK";
+    text(hint, 320 - textW(hint, 1) / 2, 396, 1, COL.hint);
   }
 
-  function drawStates() {
-    var info = S.info;
-    text("MY BACKUPS", 36, 20, 2, COL.txt);
-    var bt = "SNAPSHOTS OF YOUR OWN FILE";
-    text(bt, W - 36 - textW(bt, 1), 20, 1, COL.hint);
-
-    /* route filter tabs */
-    var tx = 36;
-    for (var t = 0; t < TABS.length; t++) {
-      var on = S.tab === t;
-      var tw = textW(TABS[t], on ? 2 : 1);
-      text(TABS[t], tx, 42, on ? 2 : 1, on ? COL.sel : COL.hint);
-      tx += tw + 26;
+  function confirmBox(title, sub) {
+    box(140, 160, 360, 160);
+    text(title, 320 - textW(title, 2) / 2, 184, 2, COL.white);
+    if (sub) text(sub, 320 - textW(sub, 1) / 2, 216, 1, COL.hint);
+    var y = 258;
+    var opts = ["YES", "NO"];
+    S.confirm.yesPos = [];
+    for (var i = 0; i < opts.length; i++) {
+      var x = 240 + i * 100;
+      var on = (S.confirm.yes ? i === 0 : i === 1);
+      if (on) heart(x - 6, y + 4, 2, COL.red);
+      text(opts[i], x + 20, y, 2, on ? COL.sel : COL.white);
+      rows.push({ x: x - 14, y: y - 8, w: 96, h: 40, act: "confirm" + i, sel: on });
     }
-    var autoOn = window.UndertaleBackups ? window.UndertaleBackups.auto() : false;
-    var at = "AUTO " + (autoOn ? "ON" : "OFF");
-    text(at, W - 36 - textW(at, 1), 46, 1, autoOn ? COL.auto : COL.hint);
-    text("(ENTER TOGGLES)", W - 36 - textW("(ENTER TOGGLES)", 1), 58, 1, COL.hint);
-
-    box(32, 74, 576, 330);
-
-    /* NEW STATE row */
-    var y = 92;
-    y = menuRow(60, y, "NEW SAVE STATE", S.sel === 0, S.sel === 0 ? COL.sel : COL.txt, true) + 6;
-
-    /* slot rows */
-    var visible = Math.min(S.slots.length, 8);
-    if (S.scroll > S.slots.length - visible) S.scroll = Math.max(0, S.slots.length - visible);
-    var idx;
-    for (var r = 0; r < visible; r++) {
-      idx = S.scroll + r;
-      var s = S.slots[idx];
-      if (!s) break;
-      var sel = S.sel === idx + 1;
-      if (sel) heart(62, y + 3, 2, COL.red);
-      var meta = s.meta || {};
-      var rc = routeColor(meta.route);
-      text((meta.route || "?").slice(0, 3), 92, y, 2, rc);
-      var lx = 92 + textW("GEN", 2) + 14;
-      var bossTxt = meta.boss || meta.area || "SAVE";
-      text(bossTxt.slice(0, 18), lx, y, 2, sel ? COL.sel : COL.txt);
-      var lvTxt = "LV" + (meta.lv || 1);
-      text(lvTxt, 340, y, 2, sel ? COL.sel : COL.txt);
-      var tTxt = new Date(s.id).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      text(tTxt, 400, y, 2, sel ? COL.sel : COL.hint);
-      if (s.auto) text("AUTO", 470, y, 2, COL.auto);
-      rows.push({ x: 56, y: y - 4, w: 440, h: 20, act: "slot" + idx, sel: sel });
-      y += 22;
-    }
-    if (S.slots.length === 0) {
-      text("NO STATES YET - PRESS Z TO MAKE ONE", 320 - textW("NO STATES YET - PRESS Z TO MAKE ONE", 1) / 2, 200, 1, COL.hint);
-    }
-    if (S.slots.length > 8) {
-      var sc = "MORE " + (S.slots.length - 8);
-      text(sc, 320 - textW(sc, 1) / 2, 372, 1, COL.hint);
-    }
-
-    var hint = "\u2190\u2192 ROUTE   \u2191\u2193 SELECT   Z RESTORE   D DELETE   X BACK";
-    text(hint, 320 - textW(hint, 1) / 2, 414, 1, COL.hint);
-    text("SHIFT CTRL E ANYWHERE FOR A QUICK BACKUP", 320 - textW("SHIFT CTRL E ANYWHERE FOR A QUICK BACKUP", 1) / 2, 428, 1, COL.hint);
   }
 
   function drawConfirm() {
     var c = S.confirm;
-    if (c.kind === "restore") {
-      var m = c.meta || {};
-      var t = "RESTORE THIS SAVE STATE?";
-      var sub = (m.route || "?") + (m.boss ? " - " + m.boss : "") + "  LV" + (m.lv || 1) +
-                "  " + new Date(c.id).toLocaleString();
-      confirmBox(t, sub);
-    } else if (c.kind === "boss") {
+    if (c.kind === "boss") {
       var b = c.boss || {};
-      var t2 = "SKIP TO " + (b.name || "THIS BOSS") + "?";
-      var sub2 = "LV " + (b.lv || 1) + " - " + (b.sub || b.area || "") +
-                 (b.route === "GENOCIDE" ? " - GENOCIDE" : "");
-      confirmBox(t2, sub2);
-      text("YOUR CURRENT FILE WILL BE REPLACED", 320 - textW("YOUR CURRENT FILE WILL BE REPLACED", 1) / 2, 232, 1, COL.hint);
+      confirmBox("SKIP TO " + (b.name || "THIS BOSS") + "?",
+        "LV " + (b.lv || 1) + "  " + (b.sub || b.area || "") +
+        (b.route === "GENOCIDE" ? "  -  GENOCIDE" : ""));
+      text("YOUR CURRENT FILE WILL BE REPLACED", 320 - textW("YOUR CURRENT FILE WILL BE REPLACED", 1) / 2, 236, 1, COL.hint);
     } else if (c.kind === "quit") {
       confirmBox("QUIT THE GAME?", "BACK TO THE LOADING SCREEN");
-    } else {
-      confirmBox("DELETE THIS SAVE STATE?", new Date(c.id).toLocaleString());
     }
-    var hint = "Z CONFIRM   X CANCEL";
-    text(hint, 320 - textW(hint, 1) / 2, 320, 1, COL.hint);
+    var hint = "Z: CONFIRM   X: CANCEL";
+    text(hint, 320 - textW(hint, 1) / 2, 346, 1, COL.hint);
   }
 
   function draw() {
@@ -2838,12 +2421,10 @@ function notify_config_change() {
     rows = [];
     S.tick++;
     ctx.clearRect(0, 0, W, H);
-    /* dim the frozen game behind us, exactly like the game fades dialogs */
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(0, 0, W, H);
     if (S.mode === "main") drawMain();
     else if (S.mode === "boss") drawBoss();
-    else if (S.mode === "states") drawStates();
     else drawConfirm();
   }
 
@@ -2855,30 +2436,6 @@ function notify_config_change() {
   }
 
   /* ---------- actions ---------- */
-  function makeState() {
-    if (window.UndertaleBackups) window.UndertaleBackups.make();
-    refresh();
-  }
-  function doRestore() {
-    var res = window.UndertaleBackups.restore(S.confirm.id);
-    if (res && res.ok) {
-      close();
-      /* wait for the IndexedDB writes to land BEFORE reloading - the old
-         60 ms timer could beat the IDB transaction and lose the restore */
-      var done = res.done || Promise.resolve(true);
-      done.then(function () {
-        setTimeout(function () { window.location.reload(); }, 150);
-      }, function () {
-        setTimeout(function () { window.location.reload(); }, 150);
-      });
-    }
-  }
-  function doDelete() {
-    window.UndertaleBackups.del(S.confirm.id);
-    S.confirm = null;
-    S.mode = "states";
-    refresh();
-  }
   function doBossGo() {
     var b = S.confirm.boss;
     if (!b || !window.UTBossStates) { S.confirm = null; S.mode = "boss"; return; }
@@ -2905,7 +2462,7 @@ function notify_config_change() {
     var bl = bossList();
     var b = bl[S.bossSel];
     if (!b) return;
-    S.confirm = { kind: "boss", boss: b, id: 0, yes: true };
+    S.confirm = { kind: "boss", boss: b, yes: true };
     S.mode = "confirm";
   }
 
@@ -2915,16 +2472,12 @@ function notify_config_change() {
   function confirmBack() {
     var kind = S.confirm && S.confirm.kind;
     S.confirm = null;
-    if (kind === "quit") S.mode = "main";
-    else if (kind === "boss") S.mode = "boss";
-    else S.mode = "states";
+    S.mode = kind === "boss" ? "boss" : "main";
   }
   function confirmGo() {
     if (S.confirm.yes) {
-      if (S.confirm.kind === "restore") doRestore();
-      else if (S.confirm.kind === "boss") doBossGo();
-      else if (S.confirm.kind === "quit") { S.confirm = null; close(); if (typeof quitIfSupported === "function") quitIfSupported(); }
-      else doDelete();
+      if (S.confirm.kind === "boss") doBossGo();
+      else { S.confirm = null; close(); if (typeof quitIfSupported === "function") quitIfSupported(); }
     } else {
       confirmBack();
     }
@@ -2934,35 +2487,11 @@ function notify_config_change() {
   function mainAction(i) {
     if (i === 0) close();
     else if (i === 1) { S.mode = "boss"; S.bossSel = 0; S.bossScroll = 0; }
-    else if (i === 2) { S.mode = "states"; S.sel = 0; S.scroll = 0; refresh(); }
-    else if (i === 3) { if (window.UndertaleBackups) window.UndertaleBackups.toggleFullscreen(); }
-    else if (i === 4) {
-      S.confirm = { kind: "quit", id: 0, yes: false };
+    else if (i === 2) { if (window.UTFullscreen) window.UTFullscreen.toggle(); }
+    else if (i === 3) {
+      S.confirm = { kind: "quit", yes: false };
       S.mode = "confirm";
     }
-  }
-
-  function statesUp() {
-    S.sel = Math.max(0, S.sel - 1);
-    if (S.sel < S.scroll) S.scroll = S.sel;
-  }
-  function statesDown() {
-    S.sel = Math.min(S.slots.length, S.sel + 1);
-    if (S.sel > S.scroll + 7) S.scroll = S.sel - 7;
-  }
-  function statesGo() {
-    if (S.sel === 0) { makeState(); return; }
-    var s = S.slots[S.sel - 1];
-    if (!s) return;
-    S.confirm = { kind: "restore", id: s.id, meta: s.meta, yes: true };
-    S.mode = "confirm";
-  }
-  function statesDelete() {
-    if (S.sel === 0) return;
-    var s = S.slots[S.sel - 1];
-    if (!s) return;
-    S.confirm = { kind: "delete", id: s.id, meta: s.meta, yes: false };
-    S.mode = "confirm";
   }
 
   var GAME_KEYS = {
@@ -2984,8 +2513,8 @@ function notify_config_change() {
     var k = e.key;
     var handled = true;
     if (S.mode === "main") {
-      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 4) % 5;
-      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 5;
+      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 3) % 4;
+      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 4;
       else if (k === "Enter" || k === "z" || k === "Z" || k === " ") mainAction(S.sel);
       else if (k === "Escape" || k === "x" || k === "X") close();
       else handled = false;
@@ -2993,29 +2522,6 @@ function notify_config_change() {
       if (k === "ArrowUp" || k === "w" || k === "W") bossUp();
       else if (k === "ArrowDown" || k === "s" || k === "S") bossDown();
       else if (k === "Enter" || k === "z" || k === "Z" || k === " ") bossGo();
-      else if (k === "Escape" || k === "x" || k === "X") { S.mode = "main"; S.sel = 1; }
-      else handled = false;
-    } else if (S.mode === "states") {
-      if (k === "ArrowUp" || k === "w" || k === "W") statesUp();
-      else if (k === "ArrowDown" || k === "s" || k === "S") statesDown();
-      else if (k === "ArrowLeft" || k === "a" || k === "A") { S.tab = (S.tab + TABS.length - 1) % TABS.length; S.sel = 0; S.scroll = 0; refresh(); }
-      else if (k === "ArrowRight" || k === "d" || k === "D") {
-        if (S.sel > 0) statesDelete();       /* D on a slot = delete */
-        else { S.tab = (S.tab + 1) % TABS.length; S.sel = 0; S.scroll = 0; refresh(); }
-      }
-      else if (k === "Enter") {
-        if (S.sel === 0 && e.shiftKey === false && (e.ctrlKey || e.altKey)) {
-          /* reserved - ignore */
-        } else if (S.sel === 0) {
-          /* Enter on the header row toggles auto-backup */
-          if (window.UndertaleBackups) window.UndertaleBackups.auto(!window.UndertaleBackups.auto());
-        } else statesGo();
-      }
-      else if (k === "z" || k === "Z" || k === " ") {
-        if (S.sel === 0) {
-          if (window.UndertaleBackups) window.UndertaleBackups.auto(!window.UndertaleBackups.auto());
-        } else statesGo();
-      }
       else if (k === "Escape" || k === "x" || k === "X") { S.mode = "main"; S.sel = 1; }
       else handled = false;
     } else {  /* confirm */
@@ -3049,9 +2555,6 @@ function notify_config_change() {
           if (S.mode === "main") S.sel = i;
           else if (S.mode === "boss") {
             if (w.act.indexOf("boss") === 0) S.bossSel = Number(w.act.slice(4));
-          } else if (S.mode === "states") {
-            if (w.act === "NEW SAVE STATE") S.sel = 0;
-            else if (w.act.indexOf("slot") === 0) S.sel = Number(w.act.slice(4)) + 1;
           } else if (S.mode === "confirm" && w.act.indexOf("confirm") === 0) {
             confirmSel(Number(w.act.slice(7)));
           }
@@ -3062,17 +2565,11 @@ function notify_config_change() {
       for (var j = 0; j < rows.length; j++) {
         var t = rows[j];
         if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) {
-          if (S.mode === "main") { S.sel = j; mainAction(j); }
+          if (S.mode === "main") mainAction(j);
           else if (S.mode === "boss") {
             if (t.act.indexOf("boss") === 0) {
               S.bossSel = Number(t.act.slice(4));
               bossGo();
-            }
-          } else if (S.mode === "states") {
-            if (t.act === "NEW SAVE STATE") { S.sel = 0; makeState(); }
-            else if (t.act.indexOf("slot") === 0) {
-              S.sel = Number(t.act.slice(4)) + 1;
-              statesGo();
             }
           } else if (S.mode === "confirm" && t.act.indexOf("confirm") === 0) {
             confirmSel(Number(t.act.slice(7)));
@@ -3085,9 +2582,6 @@ function notify_config_change() {
   }
 
   /* ---------- open/close ---------- */
-  /* pause the engine for real. GM_pause stops the game loop inside the
-     runner (exactly what GX Mobile's pause() does) and the canvas class
-     blurs the frozen frame while the menu is up. */
   function enginePause() {
     try { if (typeof GM_pause === "function") GM_pause(); } catch (e) {}
     var gc = gameCanvas();
@@ -3099,16 +2593,15 @@ function notify_config_change() {
     if (gc) { gc.classList.remove("paused"); gc.classList.add("unpaused"); }
   }
   function gameLive() {
-    /* "active" is set by the runner glue once the canvas booted - before
-       that there is no engine to pause (and no save to act on) */
     var gc = gameCanvas();
     return !!(gc && gc.classList.contains("active"));
   }
 
   function open() {
     if (S.open) return;
-    if (!gameLive()) return;         /* still on the loading screen */
+    if (!gameLive()) return;
     if (!ensureCanvas()) return;
+    loadFont();
     attachLazy();
     refresh();
     S.open = true;
@@ -3128,9 +2621,6 @@ function notify_config_change() {
   }
   function isOpen() { return S.open; }
 
-  /* listeners: the keydown stays live (opens the menu) but the mouse/blur
-     listeners are only attached while the menu is open - the runner's boot
-     is timing-sensitive and every extra capture listener counts */
   window.addEventListener("keydown", onKey, true);
   var lazyAttached = false;
   function attachLazy() {
@@ -3146,3 +2636,4 @@ function notify_config_change() {
   window.togglePauseMenu = window.UTPauseMenu.toggle;
 })();
 /* [ut-pausemenu v1.2 DOM overlay removed - the canvas menu above replaced it] */
+

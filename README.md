@@ -69,6 +69,30 @@ makes that true, so the game switched to touch mode and **ignored the
 keyboard entirely** — no menu, no CONTINUE, nothing responded. The runner
 now detects touch devices only by actual pointer/hover capability. (v1.4)
 
+**v1.6 — the *real* "saves are deleted constantly" fix.** v1.5 fixed the
+runner-side races, but one last wipe remained, and it fired on *every* page
+load: the legacy save-sync (`savesync.js`, deltarune-embed heritage) opened
+the save database **without a version** and, whenever it did not find the
+`FILE_DATA` store yet (fresh browser profile, or simply racing the runner's
+mount), **created a brand-new empty one** — an IndexedDB version upgrade
+that silently erased the player's entire save before the game even booted.
+The next boot then found nothing to load: back to the name-picking menu.
+Its mirror-import also wrote records back in a lossy format (plain objects
+instead of byte arrays), corrupting `decomp_vars.ini` / `trophies.ini`, and
+its version ping-pong could block the gameStorage polyfill entirely.
+
+`v1.6` replaces the whole file with a one-way, strictly **read-only mirror**
+(IndexedDB → localStorage, for the menu and boss states to read). It never
+opens the database with a version, never creates or upgrades stores, never
+writes a single byte, and never imports mirrors anywhere automatically.
+The gameStorage polyfill itself gained two more hardenings: it survives a
+foreign version clash (VersionError → version-less open) and it *heals*
+records whose contents lost their type in the old imports (rebuilt into
+proper byte arrays on read/write). Deploys also reach you now: the service
+worker re-checks for updates on every visit and revalidates shell files
+with `cache: 'no-cache'` — a stale cached `index.js` could previously make
+you run pre-fix save code for up to 10 minutes after a deploy.
+
 **Boss states — skip straight to any fight.** From the pause menu's
 **BOSS STATES** screen you can jump straight to any major fight with a
 hand-crafted save: the right stats, equipment, inventory, route flags and
@@ -85,36 +109,11 @@ it (`scr_levelup` / `scr_weaponeq` / `scr_armoreq` / `scr_murderlv`):
 - **SANS** — Genocide, LV 19, Real Knife + The Locket, the Last Corridor
 
 These are **not backups** — selecting one *replaces your current file*
-(the menu says so and asks first; press Shift+Ctrl+E first if you want to
-keep where you are). After the jump, CONTINUE starts you a few steps from
-the fight, exactly as that route would arrive there.
-
-**Determination Backup — snapshots of your own file.** **Shift+Ctrl+E**
-(anywhere) snapshots your save into a slot tagged with everything the menu
-needs to show it:
-
-- **route state** — PACIFIST (no kills) / NEUTRAL / GENOCIDE (computed with
-  the game's own `scr_murderlv` logic, from your save's flags)
-- **boss checkpoint** — SANS, UNDYNE THE UNDYING, ASGORE, METTATON EX / NEO,
-  FLOWEY, PAPYRUS, TORIEL, ASRIEL
-- name, LV, area and timestamp — and slots can be restored or deleted from
-  the menu
-
-A small in-game overlay confirms it with a spinning SAVE star.
-**AUTO-BACKUP** (on by default, toggle in the pause menu) snapshots your save
-whenever it changes — no menu needed — at most once every 5 minutes. Up to 24
-slots are kept; when full, the oldest automatic ones are pruned first.
-
-Restoring writes the slot back over both the save mirror *and* the game's
-own file system (IndexedDB), waits for the write to land, then reloads — you
-come back exactly where the snapshot was taken.
-
-Some browsers reserve Ctrl+Shift+E (Firefox opens its Network monitor with
-it), so the combo is captured two ways: a plain keydown listener (enough
-wherever the browser delivers the combo), and — while in fullscreen — the
-Keyboard Lock API. **F4 toggles fullscreen** (same key as the official PC
-release), so on Firefox: `F4` first, then `Shift+Ctrl+E` works as many
-times as you like.
+(the menu says so and asks first). After the jump, CONTINUE starts you a few
+steps from the fight, exactly as that route would arrive there. The files
+are written through the same gameStorage client the runner itself uses, so
+what the menu writes and what the game reads are one single, consistent
+save record.
 
 **Equipment set bonuses.** Wearing the *exact* matching weapon + armor pair
 gives a small, pair-specific bonus — every set does something different now,
@@ -143,28 +142,28 @@ of his fight (turn 24+).
 
 Console helpers (F12):
 
-    UndertaleBackups.list()          // show your snapshots (with route/boss tags)
-    UndertaleBackups.make()          // make a snapshot now
-    UndertaleBackups.restore(id)     // restore a snapshot over the live save
-    UndertaleBackups.del(id)         // delete a snapshot
-    UndertaleBackups.auto()          // show / set auto-backup
     UTSaveInfo.parse()               // name, LV, route, room, boss checkpoint
     UTBossStates.list                // the boss table (ids, stats, flags)
     UTBossStates.load('sans')        // jump to a boss (returns a Promise)
+    UTMirror.exportNow()             // re-mirror the save files to localStorage
 
 **Pause menu (ESC).** ESC pauses the engine for real (`GM_pause`) and opens
-a menu drawn *in the game's own visual language*: a 640x480 canvas overlay
-that shares the game canvas's pixel grid, an embedded 5x7 pixel font, the red
-SOUL as the cursor, selected entries in yellow — plus a live stats strip
-(name, LV, HP and route state):
+a menu drawn **with the game's own assets**: the real in-game font
+(`fnt_maintext`, Determination Mono — extracted from `game.unx` itself, atlas
+and all), the red SOUL as the cursor, selected entries in yellow, and a live
+stats strip (name, LV, HP and route state). It sits on a 640x480 canvas
+pinned to the game canvas, so it shares the game's pixel grid and scale:
 
-    RESUME   BOSS STATES   MY BACKUPS   FULLSCREEN   QUIT
+    RESUME   BOSS STATES   FULLSCREEN   QUIT
 
 **BOSS STATES** is the skip-to-a-fight list described above (each entry shows
-its route tag, LV and location). **MY BACKUPS** manages your own snapshots:
-filter by route (ALL / PACIFIST / NEUTRAL / GENOCIDE), make a snapshot,
-restore (Z), delete (D), toggle AUTO-BACKUP — all on the same pixel-font
-screen.
+its route tag, LV and location; the selected fight gets a confirmation box
+before it replaces your file).
+
+*(v1.6: the old MY BACKUPS screen and the Shift+Ctrl+E snapshot module were
+removed — with the save system actually persisting now they only papered
+over the wipe bugs. Boss states remain as the way to jump straight to any
+fight, including the genocide runs: SANS, UNDYNE THE UNDYING, METTATON NEO.)*
 
 Arrows (or WASD) select, Z/ENTER confirms, X/ESC goes back — mouse works
 too. While in fullscreen the browser keeps ESC for exiting fullscreen, so
@@ -172,13 +171,10 @@ open the menu before going fullscreen (or use F11 to stay windowed).
 QUIT returns to the loading screen. The same menu opens automatically on
 GX Mobile when the app loses focus.
 
-*(v1.3 also fixes a nasty bug from earlier builds: backup records were
+*(v1.3 fixed a nasty bug from earlier builds: backup records were
 imported by the save-sync into the game's file system, where they could
-crash the boot with "EXCEPTION THROWN". Records now live outside the sync's
-namespace, existing junk is cleaned up automatically, and the sync skips
-record keys entirely. The save-sync also refuses to import a mirror that is
-older than the file already stored, so a lagging mirror can no longer
-overwrite a fresh save on boot.)*
+crash the boot with "EXCEPTION THROWN". That whole module is gone in v1.6,
+and its leftover records are cleaned up automatically.)*
 
 *(The boot is armored in two more ways: a boot that crashes before the main
 loop (a flaky WebGL context race) reloads itself once hands-free, and if the
@@ -188,7 +184,7 @@ page recovers the same way instead of freezing on an error.)*
 ## Controls
 
 Arrow keys move · Z / ENTER confirm · X cancel · C menu · ESC pause ·
-F4 fullscreen · Shift+Ctrl+E make a backup snapshot
+F4 fullscreen
 
 ## Repo layout
 

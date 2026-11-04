@@ -157,7 +157,7 @@
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
-        <span>v1.5</span>
+        <span>v1.6</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
@@ -165,7 +165,7 @@
     <script src="savesync.js"></script>
     <script>
     /* [ut-gamestorage-inline] ====================================================
-       THE SAVE FIX (v1.5) - this must run BEFORE any game script is loaded.
+       THE SAVE FIX (v1.5/v1.6) - this must run BEFORE any game script is loaded.
 
        The runner picks its savedata file system ONCE, at mount time:
 
@@ -201,9 +201,52 @@
             if (!db.objectStoreNames.contains("FILE_DATA")) db.createObjectStore("FILE_DATA");
           };
           req.onsuccess = function (e) { resolve(e.target.result); };
-          req.onerror = function () { reject(req.error); };
+          /* v1.6: if some other tool ever raised the DB version above 21, a
+             fixed-version open fails with VersionError forever and the game
+             can neither load nor save. Fall back to a version-less open,
+             which always succeeds and never upgrades anything. */
+          req.onerror = function () {
+            if (req.error && req.error.name === "VersionError") {
+              var req2;
+              try { req2 = indexedDB.open("/_savedata"); }
+              catch (e2) { reject(e2); return; }
+              req2.onsuccess = function (e2) { resolve(e2.target.result); };
+              req2.onerror = function () { reject(req2.error); };
+            } else {
+              reject(req.error);
+            }
+          };
           req.onblocked = function () { reject(new Error("db blocked")); };
         });
+      }
+
+      /* v1.6: heal records whose contents lost its type in an ancient
+         mirror-import (plain {0:..,1:..} objects instead of Uint8Array).
+         The runner would otherwise copy the garbage into its in-memory FS,
+         read garbage from it and write garbage back - forever. Numeric-key
+         objects revive in ascending key order, so Object.values is exact. */
+      function saneNode(node) {
+        if (!node || typeof node !== "object") return node;
+        var c = node.contents;
+        if (c instanceof Uint8Array || c instanceof ArrayBuffer || typeof c === "string" || c == null) return node;
+        if (ArrayBuffer.isView(c)) return node;
+        if (typeof c === "object") {
+          var vals = Object.values(c);
+          var bad = false;
+          for (var i = 0; i < vals.length; i++) {
+            var v = vals[i];
+            if (typeof v !== "number" || v < 0 || v > 255 || Math.floor(v) !== v) { bad = true; break; }
+          }
+          var bytes = bad ? new Uint8Array(0) : new Uint8Array(vals);
+          var out = {
+            timestamp: (node.timestamp instanceof Date) ? node.timestamp :
+                        (node.timestamp ? new Date(Number(node.timestamp) || 0) : new Date(0)),
+            mode: typeof node.mode === "number" ? node.mode : 33206,
+            contents: bytes
+          };
+          return out;
+        }
+        return node;
       }
 
       function tx(mode, fn) {
@@ -286,10 +329,12 @@
               return tx("readonly", function (st) {
                 var r = st.get(norm(key));
                 return { __req: r };
+              }).then(function (node) {
+                return node === undefined ? node : saneNode(node);
               });
             },
             put: function (node, key) {
-              var n = toNode(node);
+              var n = saneNode(toNode(node));
               if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
               window.__gsTrace.push("put:" + name + "/" + key + " len=" +
                 (n && n.contents ? (n.contents.byteLength !== undefined ? n.contents.byteLength : n.contents.length) : "?"));
@@ -322,7 +367,7 @@
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v1.5';
+      var CACHE_VERSION = 'v1.6';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no
@@ -567,7 +612,11 @@
       /* ---------------- service worker (oggs + offline shell) ---------------- */
       function registerSW() {
         if (!('serviceWorker' in navigator)) return;
-        navigator.serviceWorker.register('sw.js').catch(function (e) {
+        navigator.serviceWorker.register('sw.js').then(function (reg) {
+          /* v1.6: ask for an update check on every visit - the browser's own
+             24 h throttle made new deploys take up to a day to reach players */
+          try { if (reg.update) reg.update().catch(function () {}); } catch (e) {}
+        }).catch(function (e) {
           console.warn('[loader] service worker unavailable:', e);
         });
       }
