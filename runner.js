@@ -1,5 +1,10 @@
 var k;
 k || (k = typeof Module !== 'undefined' ? Module : {});
+/* v1.9: build stamp - index.js verifies this on every boot and force-refreshes
+   stale caches (the service worker can serve an older runner.js long after a
+   deploy; page code is network-first, so it is the reliable side of the
+   handshake). Bump this WITH CACHE_VERSION in index.html + sw.js. */
+window.__UT_CORE = 'v1.9';
 k.hk || (k.hk = 0);
 k.hk++;
 k.ENVIRONMENT_IS_PTHREAD || k.$ww || function(a) {
@@ -492,6 +497,22 @@ GXMFS = {
         GXMFS.tl(a.oj, (c, d) => {
             if (c) return b(c);
             d.list().then(e => {
+                /* v1.9 (live-layer armor): normalize every remote entry's
+                   timestamp to a Date - legacy/numeric/string values from
+                   pre-v1.6 code or old mirror imports must never reach the
+                   reconcile comparison raw. */
+                if (e && "object" == typeof e)
+                    for (var k in e) e[k] && e[k].timestamp && !(e[k].timestamp instanceof Date) && (e[k] = {
+                        timestamp: function (v) {
+                            try {
+                                var t = new Date(v);
+                                return isNaN(t.getTime()) ? new Date(0) : t;
+                            } catch (er) {
+                                return new Date(0);
+                            }
+                        }(e[k].timestamp),
+                        mode: e[k].mode
+                    });
                 b(null, {
                     type: "remote",
                     storage: d,
@@ -560,13 +581,29 @@ GXMFS = {
                 c(p);
             if (0 === e && !h) return console.info("Reconcile finished successfully"), c(null)
         }
+        /* v1.9 (live-layer armor): records written by pre-v1.6 code (or old
+           WigdosXP mirror imports) carry numeric/string timestamps, and a raw
+           .getTime() on those throws - which kills the whole syncfs in the
+           middle of a save and freezes the game on a black screen. Normalize
+           both sides of the comparison; content is never touched. (The v1.8
+           armor landed on the IDBFS copy - this GXMFS layer is the one the
+           mount actually uses when the gameStorage polyfill is present.) */
+        var __ts = function (v) {
+            if (v instanceof Date && v.getTime) return v;
+            try {
+                var t = new Date(v);
+                return isNaN(t.getTime()) ? new Date(0) : t;
+            } catch (er) {
+                return new Date(0);
+            }
+        };
         console.info("Starting reconcile");
         var e = 0,
             f = [];
         Object.keys(a.entries).forEach(function(p) {
             var q = a.entries[p],
                 u = b.entries[p];
-            u && q.timestamp.getTime() == u.timestamp.getTime() || (f.push(p), e++)
+            u && __ts(q.timestamp).getTime() == __ts(u.timestamp).getTime() || (f.push(p), e++)
         });
         console.debug(`${f.length} entries to create/update on the ${"local"===b.type?"local filesystem":"remote filesystem"}`);
         var g = [];

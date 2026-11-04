@@ -590,6 +590,74 @@ if (typeof window === "object") {
       clearInterval(clear);
     }, 1000);
   })();
+
+  /* [ut-core-handshake] (v1.9) The service worker can keep serving an OLD
+     runner.js long after a deploy (its update check is throttled, and a
+     browser-cached index.html can pin the old CACHE_VERSION). runner.js now
+     stamps window.__UT_CORE; this page (network-first, always fresh) checks
+     it once the runner has loaded. On a mismatch or a missing stamp we
+     unregister every SW, delete the whole site cache and reload ONCE with
+     a cache-buster - so every player converges on the current engine even
+     if the SW never noticed the deploy. */
+  (function () {
+    var WANT = "v1.9";
+    var armed = false;
+    try { armed = sessionStorage.getItem("utCorePurge") === "1"; } catch (e) {}
+    function purgeAndReload() {
+      if (armed) {           /* already purged this session - do not loop */
+        try { console.warn("[ut-core] runner.js still stale after purge - giving up this session"); } catch (e) {}
+        return;
+      }
+      try { sessionStorage.setItem("utCorePurge", "1"); } catch (e) {}
+      try { console.warn("[ut-core] runner.js is stale - purging caches and reloading once"); } catch (e) {}
+      var go = function () {
+        window.location.replace(
+          window.location.pathname + "?utcore=" + WANT + window.location.hash);
+      };
+      var left = 0;
+      function done() { if (--left <= 0) go(); }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        left++;
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          var q = regs.length;
+          if (!q) return done();
+          regs.forEach(function (rg) {
+            rg.unregister().then(function () { if (--q <= 0) done(); },
+                                  function () { if (--q <= 0) done(); });
+          });
+        }).catch(done);
+      }
+      if (window.caches && caches.keys) {
+        left++;
+        caches.keys().then(function (names) {
+          var q = names.length;
+          if (!q) return done();
+          names.forEach(function (nm) {
+            caches.delete(nm).then(function () { if (--q <= 0) done(); },
+                                   function () { if (--q <= 0) done(); });
+          });
+        }).catch(done);
+      }
+      setTimeout(go, 4000);   /* never hang the player on a stuck promise */
+    }
+    var tries = 0;
+    var poll = setInterval(function () {
+      tries++;
+      var core = window.__UT_CORE;
+      if (core === WANT) {
+        clearInterval(poll);
+        try { sessionStorage.removeItem("utCorePurge"); } catch (e) {}
+        return;
+      }
+      /* runner.js loaded but carries an old (or no) stamp?
+         - no stamp AND the game already booted: an old runner that never
+           defines it - treat as stale. */
+      if (core !== undefined || window.UT_BOOTED || tries > 120) {
+        clearInterval(poll);
+        if (core !== WANT) purgeAndReload();
+      }
+    }, 500);
+  })();
 }
 
 function toggleConsole() {

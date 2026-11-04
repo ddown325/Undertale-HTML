@@ -24,6 +24,37 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v1.9 — the "black screen when you die" fix, for real this time.** All three
+crash reports ("hit by Undyne twice", "Sans", "the Judgment Hall") were the
+same event: you **die**, `scr_gameoverb` re-saves the whole savedata buffer,
+and the runner's sync reconcile hit a save record whose timestamp was not a
+`Date` — a raw `.getTime()` threw, killed the save mid-flight, and the game
+froze on a black screen. v1.8 armed the wrong layer (the IDBFS copy — dead
+code when the gameStorage polyfill is present). v1.9 armors the layer that
+actually runs:
+
+1. **The live GXMFS reconcile (`runner.js`) normalizes every timestamp** it
+   compares — numeric/string/garbage legacy values (pre-v1.6 code, old
+   WigdosXP mirror imports, external tools writing into the save DB) can
+   never crash a save again, in either sync direction. Verified live with a
+   poison record injected into the database: boot, save and quit syncs all
+   reconcile clean, and the record gets normalized to a proper `Date`.
+2. **`CACHE_VERSION` → v1.9** so every visitor re-downloads the armed
+   runner.
+3. **A runtime version handshake.** `runner.js` stamps `window.__UT_CORE`;
+   `index.js` (always network-fresh) verifies it. If the service worker is
+   still serving an older engine, the page unregisters it, deletes the whole
+   site cache and reloads once — so a stale cache can no longer keep you on
+   pre-fix code after a deploy.
+4. **The offline single-file edition was rebuilt from the current tree.**
+   The previous offline download (offline-v1) predated *every* save fix —
+   and it still embedded the ancient "WigdosXP unified save sync", the very
+   code that wrote those non-Date timestamps in the first place. The new
+   build (offline-v1.9) carries the current engine, the read-only mirror,
+   the healer, the armor, **and the v1.8 Harder Sans music file that the
+   old offline build never had**. If you play offline, re-download it —
+   this is very likely why the crashes "came back".
+
 **Saves actually work here — and so does your keyboard.** The stock runner
 is the Opera GX Games build: its whole save system (saving *and* loading
 `undertale.sav`) runs through a `window.oprt.gameStorage` API that only
