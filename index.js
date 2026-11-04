@@ -246,14 +246,23 @@ var Module = {
   print: (function () {
     var element = document.getElementById("output");
     if (element) element.value = ""; // clear browser cache
+    /* [ut-lagfix v1.7] the GM runner keeps printing while you play (room
+       changes, audio warnings). "value +=" is O(n) EVERY line and the
+       textarea grows without bound, so after a while each log line copies
+       megabytes and the game starts stuttering - classic "lags after some
+       time". Cap the buffer and collapse consecutive duplicate spam. */
+    var MAX_LOG = 40000;      /* characters kept in the <textarea> */
+    var lastText = null, repeats = 0;
     return function (text) {
       if (arguments.length > 1)
         text = Array.prototype.slice.call(arguments).join(" ");
-      // These replacements are necessary if you render to raw HTML
-      //text = text.replace(/&/g, "&amp;");
-      //text = text.replace(/</g, "&lt;");
-      //text = text.replace(/>/g, "&gt;");
-      //text = text.replace('\n', '<br>', 'g');
+      if (text === lastText) {
+        repeats++;
+        if (repeats % 100 !== 0) return;   /* identical line: swallow */
+      } else {
+        lastText = text;
+        repeats = 0;
+      }
       console.log(text);
       if (text === "Entering main loop.") {
         // It seems that this text ensures game is loaded.
@@ -262,6 +271,8 @@ var Module = {
         ensureAspectRatio();
       }
       if (element) {
+        if (element.value.length > MAX_LOG)
+          element.value = element.value.slice(-Math.floor(MAX_LOG / 2));
         element.value += text + "\n";
         element.scrollTop = element.scrollHeight; // focus on bottom
       }
@@ -1616,7 +1627,7 @@ function notify_config_change() {
    ---------------------------------------------------------
    The save-sync mirrors GameMaker's virtual file system (IndexedDB /_savedata)
    into localStorage under "ut/_savedata/<file>". This module parses file0
-   (the main save, 553 lines) and derives:
+   (the main save, 549 lines) and derives:
 
      name / LV / HP / gold / EXP / kills
      murderlv   - exact port of the game's own scr_murderlv (genocide tracker)
@@ -1689,7 +1700,7 @@ function notify_config_change() {
   function findFile(name) {
     /* The HTML5 port keeps every game file inside ONE buffer file,
        undertale.sav, whose content is a JSON object:
-           {"file0":"<553 lines>","undertale.ini":"...","file9":"..."}
+           {"file0":"<549 lines>","undertale.ini":"...","file9":"..."}
        (the game's ossafe_file_text_* wrappers read from the in-memory
        savedata ds_map, which obj_time fills by json_decoding that file).
        Read the entry from there first, then fall back to per-file mirrors
@@ -1768,9 +1779,14 @@ function notify_config_change() {
     var txt = findFile("file0");
     if (!txt) return null;
     var L = txt.replace(/\r/g, "").split("\n");
-    if (L.length < 553) return null;
+    /* [v1.7] file0 layout fixed to match scr_load exactly:
+       12+16 header lines, item pairs 12..27, weapon 28, armor 29,
+       flags 30..541, plot 542, menuchoice 543-545, song 546, room 547,
+       time 548. (The old reader was shifted 4 lines and misread REAL
+       game saves too, not just boss states.) */
+    if (L.length < 549) return null;
     var fl = [];
-    for (var i = 32; i < 545; i++) fl.push(+L[i] || 0);
+    for (var i = 30; i < 542; i++) fl.push(+L[i] || 0);
     var info = {
       raw: txt,
       name: (L[0] || "?").slice(0, 12),
@@ -1781,11 +1797,11 @@ function notify_config_change() {
       xp: +L[9] || 0,
       gold: +L[10] || 0,
       kills: +L[11] || 0,
-      weapon: +L[30] || 0,
-      armor: +L[31] || 0,
-      plot: +L[545] || 0,
-      room: +L[551] || 0,
-      time: +L[552] || 0,
+      weapon: +L[28] || 0,
+      armor: +L[29] || 0,
+      plot: +L[542] || 0,
+      room: +L[547] || 0,
+      time: +L[548] || 0,
       flags: fl
     };
     info.murderlv = murderlv(fl);
@@ -1915,7 +1931,14 @@ function notify_config_change() {
     return { maxhp: maxhp, at: at, df: df };
   }
 
-  /* ---------- file0 builder: the 553-line save ---------- */
+  /* ---------- file0 builder: the 549-line save ---------- */
+  /* Layout MUST match scr_load exactly (bytecode-verified against game.unx):
+     0-11 name,lv,maxhp,maxen,at,wstrength,df,adef,sp,xp,gold,kills
+     12-27 item[i],phone[i] interleaved (i = 0..7)
+     28 weapon, 29 armor, 30-541 flag[0..511], 542 plot,
+     543-545 menuchoice[0..2], 546 currentsong, 547 currentroom, 548 time.
+     The game reads line 547 as the room; a shift here makes scr_dogcheck
+     see room 0 (< room_area1) and dump you in room_of_dog. */
   function buildFile0(b, name) {
     var st = statsFor(b.lv);
     var L = [];
@@ -1931,23 +1954,23 @@ function notify_config_change() {
     L[9] = b.xp;
     L[10] = b.gold;
     L[11] = b.kills;
-    /* 12..29: item[i], phone[i] interleaved (i = 0..8) */
-    for (var i = 0; i <= 8; i++) {
+    /* 12..27: item[i], phone[i] interleaved (i = 0..7) */
+    for (var i = 0; i <= 7; i++) {
       L[12 + 2 * i] = (b.items && b.items[i]) || 0;
       L[13 + 2 * i] = 0;
     }
-    L[30] = b.weapon;
-    L[31] = b.armor;
-    /* 32..544: flags (0..512) */
-    for (var f = 0; f <= 512; f++) L[32 + f] = 0;
-    if (b.flags) for (var k in b.flags) L[32 + Number(k)] = b.flags[k];
-    L[545] = b.plot;
-    L[546] = 0; L[547] = 0; L[548] = 0; L[549] = 0;   /* menuchoice */
-    L[550] = 0;                                       /* currentsong */
-    L[551] = b.room;
-    L[552] = b.time;
+    L[28] = b.weapon;
+    L[29] = b.armor;
+    /* 30..541: flags (0..511) */
+    for (var f = 0; f <= 511; f++) L[30 + f] = 0;
+    if (b.flags) for (var k in b.flags) L[30 + Number(k)] = b.flags[k];
+    L[542] = b.plot;
+    L[543] = 0; L[544] = 0; L[545] = 0;   /* menuchoice */
+    L[546] = 0;                           /* currentsong */
+    L[547] = b.room;
+    L[548] = b.time;
     var out = "";
-    for (var n = 0; n <= 552; n++) out += (L[n] === undefined ? 0 : L[n]) + "\n";
+    for (var n = 0; n <= 548; n++) out += (L[n] === undefined ? 0 : L[n]) + "\n";
     return out;
   }
 
@@ -2051,7 +2074,7 @@ function notify_config_change() {
      game file lives inside ONE buffer, undertale.sav, holding a JSON
      object that the game json_decodes into its savedata ds_map:
 
-       { "file0": "<553 lines>", "file9": "...", "undertale.ini": "..." }
+       { "file0": "<549 lines>", "file9": "...", "undertale.ini": "..." }
 
      obj_time loads it with buffer_load_async at boot; scr_save writes it
      with buffer_save_async. The buffer format is the JSON text plus a

@@ -146,19 +146,28 @@
         return openDB().then(function (db) {
             return new Promise(function (resolve, reject) {
                 var values = [], keys = [];
+                var closed = false;
+                function finish(fn, arg) {
+                    if (!closed) {
+                        closed = true;
+                        try { db.close(); } catch (e) {}   /* [ut-lagfix] one connection per export, always closed */
+                    }
+                    fn(arg);
+                }
                 try {
                     var tx = db.transaction([CONFIG.storeName], 'readonly');
                     var store = tx.objectStore(CONFIG.storeName);
                     var req = store.openCursor();
                     req.onsuccess = function (ev) {
                         var cur = ev.target.result;
-                        if (!cur) return resolve({ keys: keys, values: values });
+                        if (!cur) return finish(resolve, { keys: keys, values: values });
                         keys.push(cur.primaryKey);
                         values.push(cur.value);
                         cur.continue();
                     };
-                    req.onerror = function (ev) { reject(ev.target.error); };
-                } catch (e) { reject(e); }
+                    req.onerror = function (ev) { finish(reject, ev.target.error); };
+                    tx.onabort = function (ev) { finish(reject, ev.target.error); };
+                } catch (e) { finish(reject, e); }
             });
         });
     }
@@ -224,7 +233,11 @@
             setTimeout(function () {
                 window.parent.postMessage({ type: 'wigdosxp-integration-ready', gameId: 'ut' }, '*');
             }, 1000);
-            setInterval(function () { self.notifySaveDataChanged(); }, 5000);
+            /* [ut-lagfix] skip the parent notification while hidden - the
+               export tick catches it up when the tab is visible again */
+            setInterval(function () {
+                if (!document.hidden) self.notifySaveDataChanged();
+            }, 5000);
         }
     };
 
@@ -245,12 +258,35 @@
                 }
             }
             log('file system found - mirroring starts');
-            var tick = function () {
-                exportToLocalStorage().then(function () { WigdosXPSync.notifySaveDataChanged(); },
-                    function () { /* store vanished (page teardown) - retry next tick */ });
-            };
-            tick();
-            setInterval(tick, CONFIG.syncIntervalMs);
+            /* [ut-lagfix v1.7] self-scheduling chain instead of setInterval:
+               an interval queues a BURST of ticks while the tab is hidden and
+               then fires them all at once (several concurrent IndexedDB
+               exports + localStorage writes = the "lags after some time").
+               This chain never overlaps itself, idles while hidden, and
+               catches up once when you come back. */
+            var tickTimer = null, running = false;
+            function schedule(delay) {
+                if (tickTimer !== null) return;
+                tickTimer = setTimeout(runTick, delay);
+            }
+            function runTick() {
+                tickTimer = null;
+                if (running) { schedule(1000); return; }
+                if (document.hidden) { schedule(5000); return; }   /* idle in background */
+                running = true;
+                exportToLocalStorage().then(function () {
+                    running = false;
+                    WigdosXPSync.notifySaveDataChanged();
+                    schedule(CONFIG.syncIntervalMs);
+                }, function () {
+                    running = false;   /* store vanished (page teardown) - retry next tick */
+                    schedule(CONFIG.syncIntervalMs);
+                });
+            }
+            schedule(0);
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) schedule(100);   /* catch up once on focus */
+            });
             WigdosXPSync.initialize();
         })();
     });

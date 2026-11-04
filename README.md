@@ -93,6 +93,41 @@ worker re-checks for updates on every visit and revalidates shell files
 with `cache: 'no-cache'` — a stale cached `index.js` could previously make
 you run pre-fix save code for up to 10 minutes after a deploy.
 
+**v1.7 — boss states land where they should, set bonuses are real, and the
+lag is gone.**
+
+1. **The Annoying Dog room bug.** Loading a boss state (or any continue)
+   used to dump you into the Annoying Dog room instead of the fight. Root
+   cause, verified against the game's own bytecode: the built file0 was
+   misaligned with `scr_load` by four lines, so the game read `0` as the
+   room — and `scr_dogcheck` sends any room below `room_area1` straight to
+   `room_of_dog`. The save builder now matches `scr_load` field-for-field
+   (8 item pairs, weapon/armor, 512 flags, plot, menuchoice, song, **room**,
+   time) and every boss room passes dogcheck.
+2. **Set bonuses now actually do something — and the values you are shown
+   are the values you get.** All five set checks compared
+   `weapon*64 + armor` with *greater-than* against the exact pair's value,
+   so a matching pair itself never qualified (you needed a *better* combo,
+   which then stacked every lower set's message). The heal bonus (+5 with
+   Stick + Bandage, +10 with Burnt Pan + Stained Apron) and the i-frame
+   bonus (Ballet Shoes + Old Tutu — 60% longer) existed in
+   `scr_recoitem` / `scr_damagestandard` but never fired for the actual
+   sets; the item menu's live recompute carried an older, different value
+   table on top of that. All checks are exact-pair now, the message values
+   match the applied ones, and the heal/INV sets carry no ATK/DF side
+   effects (the anti-cheat thresholds in `scr_load` were rebuilt to match
+   too, so loading a save no longer applies a wrong set).
+3. **"Lags a lot after some time" is fixed.** Three separate leaks fed it:
+   the runner's console output was appended to a `<textarea>` with
+   `value +=` — an O(n) copy per line that got slower the longer you
+   played (the log is now capped and duplicate spam is collapsed); the
+   save mirror leaked one IndexedDB connection per 10-second sync (each
+   sync now closes its connection); and the sync ran on a plain
+   `setInterval`, so a backgrounded tab queued a burst of overlapping
+   syncs that all fired at once when you came back (the mirror now
+   self-schedules, never overlaps itself and idles while the tab is
+   hidden, catching up once when you return).
+
 **Boss states — skip straight to any fight.** From the pause menu's
 **BOSS STATES** screen you can jump straight to any major fight with a
 hand-crafted save: the right stats, equipment, inventory, route flags and
@@ -131,8 +166,10 @@ right away):
 | Empty Gun + Cowboy Hat | ATK +3, DEF +2 |
 | Worn Dagger + Heart Locket | ATK +2, DEF +4 |
 
-The equip message tells you what the set does. (game data v1.3 — the loading
-footer shows the version; if your offline copy is older, re-download it.)
+The equip message tells you what the set does, the values it shows are the
+values the game applies, and the bonuses are re-derived from your current
+gear wherever it matters — healing items, the damage/i-frame calculation
+and the item menu all agree. (game data v1.7)
 
 **More Sans death dialogue (genocide route).** Sans's rematch intro now has
 unique lines for deaths 12 through 17 — he used to run out of material after
