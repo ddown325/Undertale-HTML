@@ -34,6 +34,34 @@ very same IndexedDB layout the runner uses, so the save point, CONTINUE and
 everything else behaves like it should — and your save survives reloads and
 reboots.
 
+**v1.5 — the "saves are deleted constantly" fix.** Two real bugs were left
+in v1.4, and they are why saves still vanished after a reload and the game
+kept asking you to pick a name:
+
+1. **A load-order race.** The runner picks its save file system exactly once,
+   at mount time: `window.oprt && window.oprt.gameStorage ? GXMFS : IDBFS`.
+   The v1.4 polyfill lived in `index.js`, which the loader appends as a
+   dynamic script *in parallel with* `runner.js`. Whenever the runner reached
+   its mount first, it fell back to its broken IDBFS path (whose syncs
+   silently no-op) and *nothing* could be saved or loaded that session. The
+   polyfill is now inlined in `index.html`, where it runs synchronously
+   during page parse — it always wins the race. (index.js keeps a guarded
+   fallback copy for exotic embeds.)
+2. **A save-wipe race inside the runner.** The runner's `FS.syncfs` calls are
+   not serialized — it even warns *"FS.syncfs operations in flight at once"*
+   itself. At boot and at every internal game restart the savedata mount is
+   torn down and re-mounted: the LOAD reconcile starts fetching your files
+   while a SAVE reconcile (the runner writes `decomp_vars.ini` /
+   `trophies.ini` at boot) can enumerate the still-empty in-memory file
+   system and **delete every remote file "missing" from it —
+   `undertale.sav`, `file0`, `undertale.ini`, your whole save**. This is what
+   made save states "be deleted constantly". The polyfill now **refuses
+   every delete** on the savedata store: the game never legitimately deletes
+   save files (True Reset and the decomp wipe overwrite them via writes),
+   so nothing legitimate is lost — but the racing reconcile can no longer
+   destroy anything. Both failure modes were reproduced in a live browser
+   before the fix and verified gone after it.
+
 The polyfill also exposed a second bug that had to be fixed in `runner.js`
 itself: the runner decides "is this a touch device?" partly by checking
 whether `window.oprt` exists — and the polyfill (or the real GX platform)

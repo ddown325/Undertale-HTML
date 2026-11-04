@@ -157,12 +157,162 @@
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
-        <span>v1.3</span>
+        <span>v1.5</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
 
     <script src="savesync.js"></script>
+    <script>
+    /* [ut-gamestorage-inline] ====================================================
+       THE SAVE FIX (v1.5) - this must run BEFORE any game script is loaded.
+
+       The runner picks its savedata file system ONCE, at mount time:
+
+         window.oprt && window.oprt.gameStorage ? GXMFS : IDBFS   (runner.js)
+
+       and its syncfs dispatcher skips any mount without a .zk method -
+       IDBFS has none, so on a plain web host an IDBFS mount means the
+       save system silently no-ops (nothing loads, nothing persists).
+
+       Before v1.5 the polyfill below lived only in index.js, which is
+       appended as a dynamic <script> TOGETHER with runner.js - two async
+       scripts racing. Whenever the runner reached its mount first, every
+       save was lost: boot showed the name-picking flow again, boss states
+       vanished, "saves are deleted constantly". Installing the polyfill
+       here, synchronously during page parse - long before the loader
+       appends any dynamic script - makes GXMFS win every time.
+
+       index.js keeps a guarded copy (no-op when this one ran) as a second
+       line of defense for exotic embeds. Do not remove either.
+       ========================================================================= */
+    (function () {
+      "use strict";
+      if (window.oprt && window.oprt.gameStorage) return;   /* real platform - stay out */
+      window.oprt = window.oprt || {};
+
+      function openDB() {
+        return new Promise(function (resolve, reject) {
+          var req;
+          try { req = indexedDB.open("/_savedata", 21); }
+          catch (e) { reject(e); return; }
+          req.onupgradeneeded = function (e) {
+            var db = e.target.result;
+            if (!db.objectStoreNames.contains("FILE_DATA")) db.createObjectStore("FILE_DATA");
+          };
+          req.onsuccess = function (e) { resolve(e.target.result); };
+          req.onerror = function () { reject(req.error); };
+          req.onblocked = function () { reject(new Error("db blocked")); };
+        });
+      }
+
+      function tx(mode, fn) {
+        return openDB().then(function (db) {
+          return new Promise(function (resolve, reject) {
+            try {
+              var t = db.transaction(["FILE_DATA"], mode);
+              var st = t.objectStore("FILE_DATA");
+              var out = fn(st);
+              t.oncomplete = function () { resolve(out && out.__req ? out.__req.result : out); db.close(); };
+              t.onerror = function () { reject(t.error); db.close(); };
+              t.onabort = function () { reject(t.error || new Error("abort")); db.close(); };
+            } catch (e) { reject(e); }
+          });
+        });
+      }
+
+      function norm(key) {
+        key = String(key);
+        return key.charAt(0) === "/" ? key : "/_savedata/" + key;
+      }
+
+      function toNode(value) {
+        if (value && typeof value === "object" && "contents" in value) return value;
+        return { timestamp: new Date(), mode: 33206, contents: value };
+      }
+
+      window.oprt.gameStorage = {
+        open: function (name) {
+          if (!window.__gsTrace) window.__gsTrace = [];
+          if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+          window.__gsTrace.push("open:" + name);
+          /* DELETE GUARD v2 (v1.5) - NEVER delete through the polyfill.
+             WHY: the runner's reconciles are NOT serialized ("FS.syncfs
+             operations in flight at once"). At boot / game restart the
+             savedata mount is torn down and re-mounted; a SAVE reconcile
+             racing the fresh mount enumerates the still-EMPTY local FS and
+             tries to delete every remote entry "missing" from it:
+             undertale.sav, file0, undertale.ini - the player's whole save,
+             gone. GXMFS reuses its cached handle across remounts, so a
+             seen-this-mount check is not enough (v1 guard was bypassed
+             exactly that way). The game NEVER legitimately deletes these
+             files: True Reset and the decomp wipe write NEW content over
+             them (put). So: refuse every delete. Deletes are logged as
+             del-blocked for diagnosis. */
+          var seen = {};
+          function listAll() {
+            return new Promise(function (resolve) {
+              openDB().then(function (db) {
+                try {
+                  var t = db.transaction(["FILE_DATA"], "readonly");
+                  var st = t.objectStore("FILE_DATA");
+                  var entries = {};
+                  var cur = st.openCursor();
+                  cur.onsuccess = function (e) {
+                    var c = e.target.result;
+                    if (!c) { resolve(entries); db.close(); return; }
+                    var n = c.value;
+                    entries[c.key] = {
+                      timestamp: (n && n.timestamp instanceof Date) ? n.timestamp :
+                                  (n && n.timestamp ? new Date(n.timestamp) : new Date(0)),
+                      mode: n ? n.mode : 33206
+                    };
+                    c.continue();
+                  };
+                  cur.onerror = function () { resolve({}); db.close(); };
+                } catch (e) { resolve({}); db.close(); }
+              }, function () { resolve({}); });
+            });
+          }
+          return {
+            list: function () {
+              if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+              window.__gsTrace.push("list:" + name); return listAll();
+            },
+            get: function (key) {
+              if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+              window.__gsTrace.push("get:" + name + "/" + key);
+              seen[norm(key)] = true;
+              return tx("readonly", function (st) {
+                var r = st.get(norm(key));
+                return { __req: r };
+              });
+            },
+            put: function (node, key) {
+              var n = toNode(node);
+              if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+              window.__gsTrace.push("put:" + name + "/" + key + " len=" +
+                (n && n.contents ? (n.contents.byteLength !== undefined ? n.contents.byteLength : n.contents.length) : "?"));
+              seen[norm(key)] = true;
+              return tx("readwrite", function (st) {
+                st.put(n, norm(key));
+              });
+            },
+            "delete": function (key) {
+              /* DELETE GUARD v2: refuse EVERY delete (see comment above).
+                 The runner only ever deletes here through its racing
+                 reconcile bug - which wipes the player's save. The game
+                 itself resets by overwriting files (put), never by
+                 deleting them. */
+              if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
+              window.__gsTrace.push("del-blocked:" + name + "/" + key);
+              return Promise.resolve();
+            }
+          };
+        }
+      };
+    })();
+    </script>
     <script>
     (function () {
       'use strict';
@@ -172,7 +322,7 @@
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v1.4';
+      var CACHE_VERSION = 'v1.5';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no

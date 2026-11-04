@@ -1,23 +1,26 @@
 /* [ut-gamestorage:start] =======================================================
 
-   oprt.gameStorage POLYFILL  -  makes saves work on a plain web page
+   oprt.gameStorage POLYFILL  (SECOND-LINE DEFENSE - see index.html)
    ---------------------------------------------------------
-   This runner is the Opera GX Games build. Its whole save system is
-   built on window.oprt:
+   THE canonical copy of this polyfill is inlined in index.html, where it
+   runs synchronously during page parse - guaranteed before the loader
+   appends any dynamic script. That placement is THE save fix (v1.5):
 
-     - the file system mount   window.oprt && window.oprt.gameStorage ?
-                                 GXMFS : IDBFS          (runner.js)
-     - the game's save file    buffer_save_async/buffer_load_async,
-                               which the GML savedata layer uses to
-                               write undertale.sav (the JSON ds_map
-                               holding file0 / undertale.ini / ...)
+   the runner picks its savedata mount ONCE - `window.oprt &&
+   window.oprt.gameStorage ? GXMFS : IDBFS` (runner.js) - and its syncfs
+   dispatcher no-ops any mount without a .zk method, so an IDBFS mount on
+   a plain web host silently drops EVERY save. When this polyfill lived
+   only here, index.js raced runner.js (both appended as dynamic async
+   scripts): whenever the runner reached its mount first, all saves were
+   lost on reload ("name picking again", "save states deleted").
 
-   On a normal web host (GitHub Pages, itch, localhost) window.oprt does
-   not exist, so both paths silently fail: the game can neither load
-   nor persist ANY save - saves "don't save". This polyfill implements
-   the gameStorage API over the very same IndexedDB layout the runner's
-   IDBFS uses ("/_savedata" database, FILE_DATA store, nodes shaped
-   { timestamp, mode, contents }), so:
+   This copy stays as a guarded fallback for exotic embeds that load
+   index.js standalone. It no-ops when the inline copy already ran.
+   Keep BOTH copies in sync (or better: never edit this one).
+
+   The polyfill implements the gameStorage API over the very same
+   IndexedDB layout the runner's IDBFS uses ("/_savedata" database,
+   FILE_DATA store, nodes shaped { timestamp, mode, contents }), so:
 
      - the mount works exactly as before (GXMFS -> here -> IndexedDB)
      - buffer_load_async finds undertale.sav  -> CONTINUE works
@@ -83,7 +86,20 @@
            list()             -> Promise<{ key: {timestamp: Date, mode} }>
            get(key)           -> Promise<node>
            put(node, key)     -> Promise
-           delete(key)        -> Promise                                       */
+           delete(key)        -> Promise
+
+         DELETE GUARD v2 (v1.5): NEVER delete through the polyfill.
+         The runner's reconciles are NOT serialized ("FS.syncfs operations
+         in flight at once"). At boot / game restart the savedata mount is
+         torn down and re-mounted; a SAVE reconcile racing the fresh mount
+         enumerates the still-EMPTY local FS and tries to delete every
+         remote entry "missing" from it: undertale.sav, file0,
+         undertale.ini - the player's whole save. GXMFS reuses its cached
+         handle across remounts, so a seen-this-mount check is not enough
+         (v1 guard was bypassed exactly that way). The game NEVER
+         legitimately deletes these files: True Reset and the decomp wipe
+         write NEW content over them (put). Refuse every delete. */
+      var seen = {};
       function listAll() {
         return new Promise(function (resolve) {
           openDB().then(function (db) {
@@ -116,6 +132,7 @@
         get: function (key) {
           if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
           window.__gsTrace.push("get:" + name + "/" + key);
+          seen[norm(key)] = true;
           return tx("readonly", function (st) {
             var r = st.get(norm(key));
             return { __req: r };
@@ -126,16 +143,16 @@
           if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
           window.__gsTrace.push("put:" + name + "/" + key + " len=" +
             (n && n.contents ? (n.contents.byteLength !== undefined ? n.contents.byteLength : n.contents.length) : "?"));
+          seen[norm(key)] = true;
           return tx("readwrite", function (st) {
             st.put(n, norm(key));
           });
         },
         "delete": function (key) {
+          /* DELETE GUARD v2: refuse EVERY delete (see comment above). */
           if (window.__gsTrace.length > 400) window.__gsTrace.splice(0, 200);
-          window.__gsTrace.push("del:" + name + "/" + key);
-          return tx("readwrite", function (st) {
-            st.delete(norm(key));
-          });
+          window.__gsTrace.push("del-blocked:" + name + "/" + key);
+          return Promise.resolve();
         }
       };
     }
