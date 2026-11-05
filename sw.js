@@ -5,7 +5,7 @@
  *
  * Keep CACHE_VERSION in sync with the one in index.html.
  */
-var CACHE_VERSION = 'v2.0';
+var CACHE_VERSION = 'v2.2';
 var CACHE = 'undertale-html-' + CACHE_VERSION;
 
 /* Immutable game data - cache-first (never changes unless you bump the version). */

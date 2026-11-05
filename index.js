@@ -2120,6 +2120,12 @@ function notify_config_change() {
   var GEN_AFTER_NEO  = { 402: 1, 397: 1 };           /* royal guards + Muffet dead */
   var GEN_HOTLAND = { 205: 44 };                      /* 44 Hotland/Core kills   */
   var GEN_ENDGAME = { 205: 44, 425: 1, 27: 0 };     /* Hotland clear + corridor */
+  /* New Home story fully seen: room_lastruins_corridor's nine obj_story_engager
+     zones (thresholds flag[450] 9..17) self-destruct when flag[450] >= threshold,
+     so the walk to the judgment hall stays silent. Without it the first engager
+     sits on top of the spawn (x=180 vs mainchara x=140) and fires obj_battlerstory,
+     whose writer chain stalls the same way the corridor speech did. */
+  var GEN_STORYDONE = { 450: 17 };
 
   function genFlags(chain) {
     var f = {};
@@ -2220,7 +2226,7 @@ function notify_config_change() {
                               fires, Megalovania starts - exactly like the
                               real route (the old room 232 spawn landed
                               inside the trigger's mask). */
-      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND, GEN_ENDGAME]),
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND, GEN_ENDGAME, GEN_STORYDONE]),
       weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
       items: [11, 16, 36, 43, 61, 41, 41, 37],/* Pie kept, 1x Snowman Piece, the one Instant Noodles (90 HP in serious mode), Legendary Hero, Face Steak, 2x Sea Tea, Crab Apple */
       phone: [206],                           /* genocide: no friends, no upgrades */
