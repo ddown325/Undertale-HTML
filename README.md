@@ -24,6 +24,52 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.0 — Megalovania plays again, and Harder Sans is music-only.** The v1.8
+Harder Sans shipped a game-data hook: the Last Corridor trigger read a
+`hardmode.flag` from the save DB to scale Sans's karma damage ×1.3. That hook
+never worked in any shipped version, and its bytecode scaffolding is what
+kept crashing the trigger — and the trigger is what *starts the Sans fight
+and plays Megalovania*. That's why neither song ever played: the fight never
+got that far on the broken branches. v2.0 removes every game-data Sans patch:
+the trigger, the bone/blaster event, the menu bones and the KR-drain draw are
+**byte-identical to the original release** (verified instruction-by-instruction),
+so the corridor fires exactly like vanilla. Harder Sans is now purely the
+1-in-3 cursed-session music roll it always wanted to be — the alternate track
+replaces `mus_zz_megalovania.ogg` at the loader level, nothing in game data
+conditions on it, and a failed alternate download just means the normal song.
+
+Also in v2.0 — the boss-state overhauls:
+
+1. **Mettaton NEO spawns at his stage.** The genocide state dropped you at
+   `room_fire_turn` — the Royal Guards' mourning fight ("the two guards in
+   Hotland"). NEO's real fight is `obj_mettboss_event`'s genocide branch at
+   the stage room (`room_fire_core_metttest`), exactly where the EX state
+   lands; the boss-room detector now knows the Royal Guards room too.
+2. **Sans spawns at the corridor entrance** (`room_lastruins_corridor`,
+   plot 199 — the same spawn Flowey's Time Machine uses). The old spawn
+   was inside the trigger's mask, so the fight could re-fire behind you.
+3. **Every state ships 2 equipped items + 8 heals.** No more half-empty
+   inventories: two Butterscotch Pies (full heal) on every state, two
+   Instant Noodles (vanilla behavior — 90 HP in serious boss fights, which
+   is full at these LVs), and the rest tiered per route (Snowman Pieces,
+   Legendary Heroes, Face Steaks, Sea Teas…). Noodle behavior is
+   deliberately untouched game data.
+4. **The CELL menu works.** Every state now carries the phone apps a real
+   save has at that point (Toriel's Phone everywhere, Papyrus's number
+   after his date, Dimensional Boxes A/B after Alphys' upgrade) — a save
+   with the CELL button unlocked but zero apps can't exist in the real
+   game, and that's what the broken Cell menu was.
+5. **Every state is labeled.** PACI chips for the pacifist saves, GEN for
+   genocide — nothing ships blank; genocide kills are the natural route
+   numbers (21 / 17 / 21 / 44) so world triggers see a truthful count.
+6. **`CACHE_VERSION` → v2.0** — every visitor re-downloads the clean game
+   data; the offline single-file edition is rebuilt from it (offline-v2.0).
+   The 17 branch retargets from v1.9 survive: `scr_damagestandard`'s
+   i-frame branch is fixed in place (one byte), and all 244,712 variable
+   references in live code were re-verified to resolve identically to
+   vanilla — the v1.9 file had a chain walking out of the file; v2.0
+   doesn't.
+
 **v1.9 — the "black screen when you die" fix, for real this time.** All three
 crash reports ("hit by Undyne twice", "Sans", "the Judgment Hall") were the
 same event: you **die**, `scr_gameoverb` re-saves the whole savedata buffer,

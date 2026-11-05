@@ -173,7 +173,7 @@ window.__ring = [];
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
-        <span>v1.9</span>
+        <span>v2.0</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
@@ -547,61 +547,22 @@ window.__ring = [];
       'use strict';
 
       /* ==========================================================
-       *  v1.8 - HARDER SANS (session roll, 1 in 3)
+       *  HARDER SANS (session roll, 1 in 3)
        *  ----------------------------------------------------------
        *  One roll per page load. If it hits, every Sans fight this
        *  session plays mus_zz_megalovania_alternate.ogg instead of
-       *  Megalovania (VFS swap in main()), and hardmode.flag is
-       *  written into the savedata store so the game's Last
-       *  Corridor trigger reads it and multiplies every source of
-       *  Sans's damage - karma gain on contact AND the KR drain -
-       *  by 1.3. Session-scoped on purpose: the runner decodes each
-       *  sound index once and caches it for the life of the page,
-       *  so a per-fight swap could silently desync music vs damage.
-       *  The game clamps its read to >= 1, so a failed write can
-       *  never zero out damage.
+       *  Megalovania (VFS swap in main()). Session-scoped on purpose:
+       *  the runner decodes each sound index once and caches it for
+       *  the life of the page, so a per-fight swap would desync.
+       *  (v2.0: the old hardmode.flag damage write is gone - that
+       *  game-data hook never worked in any shipped version and its
+       *  bytecode scaffolding is what crashed the Sans trigger. The
+       *  alternate track is the feature.)
        *  (index.js carries a guarded copy of the roll for exotic
        *  embeds that load it standalone - e.g. the offline build.)
        * ========================================================== */
       var UT_HARD_SANS = (Math.random() < 1 / 3);
       window.__utHardSans = UT_HARD_SANS;
-      (function writeHardSansFlag() {
-        var value = UT_HARD_SANS ? '1.3' : '1';
-        function openDB() {
-          return new Promise(function (resolve, reject) {
-            var req;
-            try { req = indexedDB.open('/_savedata', 21); }
-            catch (e) { reject(e); return; }
-            req.onupgradeneeded = function (e) {
-              var db = e.target.result;
-              if (!db.objectStoreNames.contains('FILE_DATA')) db.createObjectStore('FILE_DATA');
-            };
-            req.onsuccess = function (e) { resolve(e.target.result); };
-            req.onerror = function () {
-              if (req.error && req.error.name === 'VersionError') {
-                var req2;
-                try { req2 = indexedDB.open('/_savedata'); }
-                catch (e2) { reject(e2); return; }
-                req2.onsuccess = function (e2) { resolve(e2.target.result); };
-                req2.onerror = function () { reject(req2.error); };
-              } else { reject(req.error); }
-            };
-            req.onblocked = function () { reject(new Error('db blocked'));
-            };
-          });
-        }
-        openDB().then(function (db) {
-          try {
-            var t = db.transaction(['FILE_DATA'], 'readwrite');
-            var st = t.objectStore('FILE_DATA');
-            var bytes = new TextEncoder().encode(value + '\n');
-            st.put({ timestamp: new Date(), mode: 33206, contents: bytes },
-                   '/_savedata/hardmode.flag');
-            t.oncomplete = function () { db.close(); };
-            t.onerror = t.onabort = function () { db.close(); };
-          } catch (e) { try { db.close(); } catch (e2) {} }
-        }).catch(function () {});
-      })();
 
       /* ==========================================================
        *  v1.9 - BOSS STATE PENDING WRITE (the "state did not take" fix)
@@ -672,7 +633,7 @@ window.__ring = [];
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v1.9';
+      var CACHE_VERSION = 'v2.0';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no
@@ -682,7 +643,7 @@ window.__ring = [];
         'game.unx.part2': 19993648,
         'game.unx.part3': 19993648,
         'game.unx.part4': 19993648,
-        'game.unx.part5': 20038184,
+        'game.unx.part5': 20002092,
         'runner.wasm': 5645898,
         'runner.data': 12561615,
         'audio-worklet.js': 491,
@@ -691,7 +652,10 @@ window.__ring = [];
       };
       var PARTS = ['game.unx.part1', 'game.unx.part2', 'game.unx.part3', 'game.unx.part4', 'game.unx.part5'];
       var RUNTIME = ['runner.wasm', 'runner.data', 'audio-worklet.js', 'lang/lang_en.json', 'lang/lang_ja.json'];
-      var TOTAL_BYTES = 120917781;
+      /* v2.0: computed from SIZES so the progress bar can never drift out
+         of sync with a shard resize again */
+      var TOTAL_BYTES = 0;
+      for (var sz in SIZES) TOTAL_BYTES += SIZES[sz];
 
       var el = {
         loader: document.getElementById('utLoader'),
@@ -961,7 +925,7 @@ window.__ring = [];
                 new Blob([alt], { type: 'audio/ogg' }));
             } catch (e) {
               /* alternate unavailable - the fight just uses the normal
-               * track; the damage boost still applies (flag said 1.3). */
+               * Megalovania; nothing else was conditioned on the roll. */
               console.warn('[loader] harder-sans track unavailable:', e && e.message);
             }
           }

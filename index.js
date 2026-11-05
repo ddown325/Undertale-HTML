@@ -338,17 +338,18 @@
 })();
 
 /* [ut-hardersans-inline] ==================================================
-   v1.8 - HARDER SANS session roll (1 in 3). index.html owns the roll for
+   HARDER SANS session roll (1 in 3). index.html owns the roll for
    the normal online page; this guarded copy exists for embeds that load
    index.js standalone (e.g. the offline single-file edition), where the
    inline module is absent. Same rule as the polyfill copies: no-op when
    the roll already happened.
 
-   The winner gets: mus_zz_megalovania_alternate.ogg instead of Megalovania
-   for every Sans fight this session, and hardmode.flag = "1.3" in the
-   savedata store, which the game's Last Corridor trigger reads to scale
-   all of Sans's damage (karma gain + KR drain) by 1.3. Session-scoped
-   because the runner caches decoded audio per sound index per page.
+   The winner gets mus_zz_megalovania_alternate.ogg instead of Megalovania
+   for every Sans fight this session (the VFS swap in the loader).
+   v2.0: the hardmode.flag damage write is gone - that game-data hook
+   never worked and its bytecode scaffolding is what crashed the Sans
+   trigger. The alternate track is the feature. Session-scoped because
+   the runner caches decoded audio per sound index per page.
    ========================================================================= */
 if (!window.__utHardSansRolled) {
   window.__utHardSansRolled = true;
@@ -356,42 +357,6 @@ if (!window.__utHardSansRolled) {
     ? window.__utHardSans
     : (Math.random() < 1 / 3);
   window.__utHardSans = UT_HARD;
-  (function () {
-    var value = UT_HARD ? "1.3" : "1";
-    function openDB() {
-      return new Promise(function (resolve, reject) {
-        var req;
-        try { req = indexedDB.open("/_savedata", 21); }
-        catch (e) { reject(e); return; }
-        req.onupgradeneeded = function (e) {
-          var db = e.target.result;
-          if (!db.objectStoreNames.contains("FILE_DATA")) db.createObjectStore("FILE_DATA");
-        };
-        req.onsuccess = function (e) { resolve(e.target.result); };
-        req.onerror = function () {
-          if (req.error && req.error.name === "VersionError") {
-            var req2;
-            try { req2 = indexedDB.open("/_savedata"); }
-            catch (e2) { reject(e2); return; }
-            req2.onsuccess = function (e2) { resolve(e2.target.result); };
-            req2.onerror = function () { reject(req2.error); };
-          } else { reject(req.error); }
-        };
-        req.onblocked = function () { reject(new Error("db blocked")); };
-      });
-    }
-    openDB().then(function (db) {
-      try {
-        var t = db.transaction(["FILE_DATA"], "readwrite");
-        var st = t.objectStore("FILE_DATA");
-        var bytes = new TextEncoder().encode(value + "\n");
-        st.put({ timestamp: new Date(), mode: 33206, contents: bytes },
-               "/_savedata/hardmode.flag");
-        t.oncomplete = function () { db.close(); };
-        t.onerror = t.onabort = function () { db.close(); };
-      } catch (e) { try { db.close(); } catch (e2) {} }
-    }).catch(function () {});
-  })();
 }
 /* [ut-hardersans-inline:end] */
 
@@ -982,11 +947,11 @@ function manifestFiles()
 
 function manifestFilesMD5()
 {
-  return [ "df5bfcc85c4776fadfb79ce2dc9fae76",
-"e326eaa5b8c4615cc473610459395225",
+  return [ "c796f9390f0ae1b05fdbf556311fb559",
+"1647d3ad4762cc3e78e490b208a878a2",
 "f71a3a6a351db50641cec0b037fb7aa3",
 "e8f1e8db8cf996f8715a6f2164c2e44e",
-"be1043d478b3cae351f71616d26ac116",
+"e07719cee5a04302565486e382d4ed6a",
 "da78df4767592b0759de45f1a97f7c05",
 "bc7c594cda5c6c1b0276fb86a11e175b",
 "41833545251f09c1bec5c6dc9075c2d9",
@@ -1194,12 +1159,13 @@ function manifestFilesMD5()
 "1341aa450a89f60a8f8b5fa50f1fbb4d",
 "dfe0ee8620f7f5b132b8890cfbd68fa4",
 "f54e68ee70488442f4406e055bd3de64",
+"f901f166487a0888c4bd69be1f030b90",
 "29fd7ef535d0a61a8f1a8fc684f41246",
 "3ea95393e37003490ed3707d3e9276f7",
 "fc49ca134bbec186ac6b849740d208a8",
 "68d404e8253721ac67ee2d530f837d91",
-"d51094cea295befbdc753f8ade15141c",
-"73d7332839c2582238a48f3b437e7c16" ];
+"5fe2c21c5239c9565c9e2c48b4b47566",
+"6f8fab82c16339552993ac103942f632" ];
 }
 
 function onFirstFrameRendered()
@@ -2033,15 +1999,17 @@ function notify_config_change() {
 
   function bossOf(info) {
     var rn = info.roomName, g = info.route === "GENOCIDE";
-    if (rn === "room_sanscorridor") return "SANS";
+    if (rn === "room_sanscorridor" || rn === "room_lastruins_corridor") return "SANS";
     if (g && (rn === "room_water_trashsavepoint" || rn === "room_water_undynebridge" ||
               rn === "room_water_undynebridgeend" || rn === "room_water_preundyne" ||
               rn === "room_water19" || rn === "room_water20" || rn === "room_water21"))
       return "UNDYNE THE UNDYING";
     if (/^room_water_undynefinal/.test(rn)) return "UNDYNE";
-    if (g && (rn === "room_fire_turn" || rn === "room_fire_hoteldoors" ||
-              rn === "room_fire_precore")) return "METTATON NEO";
-    if (!g && (rn === "room_fire_core_final" || rn === "room_fire_core_premett")) return "METTATON EX";
+    if (g && rn === "room_fire_turn") return "ROYAL GUARDS";
+    if (g && (rn === "room_fire_core_metttest" || rn === "room_fire_core_final" ||
+              rn === "room_fire_core_premett")) return "METTATON NEO";
+    if (!g && (rn === "room_fire_core_metttest" || rn === "room_fire_core_final" ||
+               rn === "room_fire_core_premett")) return "METTATON EX";
     if (rn === "room_asgoreroom" || rn === "room_castle_prebarrier" || rn === "room_castle_barrier") return "ASGORE";
     if (rn === "room_floweyx" || rn === "room_floweybattle") return "FLOWEY";
     if (rn === "room_asrielroom_final") return "ASRIEL";
@@ -2136,14 +2104,19 @@ function notify_config_change() {
   if (window.__utBossInit) return;
   window.__utBossInit = true;
 
-  /* ---------- genocide flag chains (exact scr_murderlv port) ---------- */
-  var GEN_RUINS   = { 202: 20, 45: 4, 52: 1, 53: 1, 54: 1, 57: 2 };
-  var GEN_SNOWDIN = { 203: 16, 67: 1, 81: 1, 252: 1 };
-  var GEN_WATER   = { 204: 18 };
+  /* ---------- genocide flag chains (exact scr_murderlv port) ----------
+     v2.0: kill counts raised to the natural genocide-route values a real
+     save has at that point (Flowey's Time Machine's Sans preset uses the
+     same numbers: 202=21, 203=17, 204=21, 205=44) - the murderlv chain
+     thresholds are all still met, and any strictly-greater checks in the
+     world see a truthful count. */
+  var GEN_RUINS   = { 202: 21, 45: 4, 52: 1, 53: 1, 54: 1, 57: 2 };
+  var GEN_SNOWDIN = { 203: 17, 67: 1, 81: 1, 252: 1 };
+  var GEN_WATER   = { 204: 21 };
   var GEN_AFTER_UT   = { 251: 1, 350: 1 };          /* Undyne the Undying dead */
-  var GEN_AFTER_NEO  = { 402: 1, 397: 1 };           /* Mettaton NEO dead       */
-  var GEN_HOTLAND = { 205: 40 };                      /* 40 Hotland/Core kills   */
-  var GEN_ENDGAME = { 205: 40, 425: 1, 27: 0 };     /* Hotland clear + corridor */
+  var GEN_AFTER_NEO  = { 402: 1, 397: 1 };           /* royal guards + Muffet dead */
+  var GEN_HOTLAND = { 205: 44 };                      /* 44 Hotland/Core kills   */
+  var GEN_ENDGAME = { 205: 44, 425: 1, 27: 0 };     /* Hotland clear + corridor */
 
   function genFlags(chain) {
     var f = {};
@@ -2154,63 +2127,84 @@ function notify_config_change() {
     return f;
   }
 
-  /* ---------- boss table (ids = save slots) ---------- */
+  /* ---------- boss table (ids = save slots) ----------
+     v2.0: every state now carries BOTH equipment slots AND all 8 item
+     slots filled with heals (user request: '2 items equipped and 8 heals'),
+     with multiples of the good stuff - more than one Butterscotch Pie,
+     Instant Noodles and Snowman Pieces. Noodles heal the way they always
+     did (90 HP in a serious/genocide fight, small elsewhere) - NO game-data
+     changes to item behavior. Zero-kill states are labeled
+     PACIFIST ('PACI') instead of the old blank chip. */
   var BOSSES = [
     { id: "toriel",   name: "TORIEL",               area: "RUINS EXIT",
-      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 25,
+      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 25,
       room: 42,  plot: 24,
-      weapon: 13, armor: 12, wstrength: 3,  adef: 3,      /* Toy Knife + Faded Ribbon (v1.8: wiki
-                                                           best-in-slot - and the ATK+2/DF+1 set bonus
-                                                           beats Bandage's no-DF) */
-      items: [1, 1, 7, 7, 0, 0, 0, 0],              /* 2x Monster Candy, 2x Spider Donut */
+      weapon: 13, armor: 12, wstrength: 3,  adef: 3,      /* Toy Knife + Faded Ribbon */
+      items: [11, 11, 7, 7, 1, 1, 21, 21],   /* 2x Butterscotch Pie, 2x Spider Donut, 2x Monster Candy, 2x Cinnamon Bun */
+      phone: [206],                           /* Toriel's Phone - picked up at the flower patch */
       time: 900, sub: "RUINS - THE EXIT" },
     { id: "papyrus",  name: "PAPYRUS",              area: "SNOWDIN FOREST",
-      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 60,
+      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 60,
       room: 82,  plot: 100,
       weapon: 14, armor: 15, wstrength: 5,  adef: 7,     /* Tough Glove + Bandanna */
-      items: [16, 16, 21, 21, 17, 17, 0, 0],        /* 2x Snowman Piece, Cinnamon Bun, Nice Cream */
+      items: [11, 11, 16, 16, 21, 21, 17, 17],        /* 2x Pie, 2x Snowman Piece, 2x Cinnamon Bun, 2x Nice Cream */
+      phone: [206],                           /* before the Papyrus date - his number not yet added */
       time: 1800, sub: "SNOWDIN - THE FOG" },
     { id: "undyne",   name: "UNDYNE",               area: "WATERFALL",
-      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 120,
+      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 120,
       room: 135, plot: 121,
       weapon: 25, armor: 24, wstrength: 7,  adef: 10,    /* Ballet Shoes + Old Tutu */
-      items: [41, 41, 42, 42, 22, 22, 0, 0],        /* 2x Sea Tea, Starfait, Temmie Flakes */
+      items: [11, 11, 16, 16, 41, 41, 21, 21],        /* 2x Pie, 2x Snowman Piece, 2x Sea Tea, 2x Cinnamon Bun */
+      phone: [206, 210],                     /* Toriel's + Papyrus's numbers */
       time: 2400, sub: "WATERFALL - THE YARD" },
     { id: "undyneut", name: "UNDYNE THE UNDYING",   area: "WATERFALL",
       route: "GENOCIDE", lv: 11, xp: 1700,  kills: 56,  gold: 60,
       room: 132, plot: 114,                       /* room_water19 - the bridge  */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER]),
       weapon: 25, armor: 24, wstrength: 7,  adef: 10,
-      items: [16, 16, 41, 41, 43, 43, 0, 0],
+      items: [11, 11, 16, 16, 36, 36, 41, 41],        /* 2x Pie, 2x Snowman, 2x Instant Noodles (90 HP - serious mode), 2x Sea Tea */
+      phone: [206],                           /* genocide: no friends, no upgrades */
       time: 3000, sub: "WATERFALL - THE BRIDGE" },
     { id: "mettatonex", name: "METTATON EX",        area: "THE CORE",
-      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 240,  /* LV12 = 2500 xp */
-      room: 212, plot: 197,
+      route: "PACIFIST", lv: 12, xp: 2500,  kills: 0,   gold: 240,  /* LV12 = 2500 xp */
+      room: 212, plot: 197,                      /* room_fire_core_metttest - the stage */
       weapon: 47, armor: 46, wstrength: 10, adef: 11,   /* Burnt Pan + Stained Apron */
-      items: [36, 36, 40, 40, 41, 41, 0, 0],        /* 2x Instant Noodles, Glamburger, Sea Tea */
+      items: [11, 11, 36, 36, 43, 43, 61, 61],        /* 2x Pie, 2x Instant Noodles, 2x Legendary Hero, 2x Face Steak */
+      phone: [220],                           /* Alphys' upgrade: Dimensional Box A (contact apps replaced) */
       time: 3600, sub: "THE CORE - THE STAGE" },
-    { id: "mettatonneo", name: "METTATON NEO",      area: "HOTLAND",
+    { id: "mettatonneo", name: "METTATON NEO",      area: "THE CORE",
       route: "GENOCIDE", lv: 15, xp: 7000,  kills: 97,  gold: 100,
-      room: 154, plot: 160,   /* room_fire_turn: killerboysnightout_event arms   */
-                              /* at plot < 163 + murderlv 12 (251/350 set).     */
-                              /* LV15 = 7000 xp (scr_levelup); kills = 20+1+16  */
-                              /* +1+18+1+40 = 97 at the Core entrance.         */
-      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_HOTLAND]),
+      room: 212, plot: 160,   /* v2.0 fix: the SAME stage room the EX fight
+                              uses - obj_mettboss_event's genocide branch
+                              (murderlv >= 12, plot <= 197) transforms into
+                              Mettaton NEO right there, exactly like the
+                              real route (the old room 154 = room_fire_turn
+                              was the Royal Guards mourning fight, which is
+                              why you spawned 'at the two guards') */
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND]),
       weapon: 47, armor: 46, wstrength: 10, adef: 11,
-      items: [43, 43, 36, 36, 61, 61, 0, 0],        /* 2x Legendary Hero, Instant Noodles, Face Steak */
-      time: 3900, sub: "HOTLAND - THE CORE ENTRANCE" },
+      items: [11, 11, 36, 36, 43, 43, 61, 61],        /* 2x Pie, 2x Instant Noodles (90 HP - serious mode), 2x Legendary Hero, 2x Face Steak */
+      phone: [206],                           /* genocide: no friends, no upgrades */
+      time: 3900, sub: "THE CORE - THE STAGE" },
     { id: "asgore",   name: "ASGORE",               area: "THE BARRIER",
-      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 300,
+      route: "PACIFIST", lv: 12, xp: 2500,  kills: 0,   gold: 300,
       room: 238, plot: 208,
-      weapon: 49, armor: 48, wstrength: 12, adef: 12,   /* Empty Gun AT12 + Cowboy Hat DF12 (scr_weaponeq/armoreq) */
-      items: [11, 36, 36, 43, 43, 0, 0, 0],         /* Butterscotch Pie, 2x Instant Noodles, Legendary Hero */
+      weapon: 49, armor: 48, wstrength: 12, adef: 12,   /* Empty Gun AT12 + Cowboy Hat DF12 */
+      items: [11, 11, 36, 36, 43, 43, 61, 61],        /* 2x Pie, 2x Instant Noodles, 2x Legendary Hero, 2x Face Steak */
+      phone: [220, 221],                     /* Dimensional Box A + B (post-EX-fight upgrade) */
       time: 4200, sub: "NEW HOME - THE BARRIER" },
     { id: "sans",     name: "SANS",                 area: "THE LAST CORRIDOR",
-      route: "GENOCIDE", lv: 19, xp: 50000, kills: 98, gold: 120,  /* 97 + NEO */
-      room: 232, plot: 200,
-      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_ENDGAME]),
+      route: "GENOCIDE", lv: 19, xp: 50000, kills: 109, gold: 120,  /* FTM's Sans preset values */
+      room: 231, plot: 199,   /* v2.0: room_lastruins_corridor + plot 199 -
+                              the same spawn Flowey's Time Machine uses.
+                              Walk right: the corridor loads, the trigger
+                              fires, Megalovania starts - exactly like the
+                              real route (the old room 232 spawn landed
+                              inside the trigger's mask). */
+      flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND, GEN_ENDGAME]),
       weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
-      items: [43, 43, 43, 36, 36, 36, 0, 0],        /* 3x Legendary Hero, 3x Instant Noodles */
+      items: [11, 11, 36, 36, 43, 61, 16, 16],        /* 2x Pie, 2x Instant Noodles (90 HP - serious mode), Legendary Hero, Face Steak, 2x Snowman Piece */
+      phone: [206],                           /* genocide: no friends, no upgrades */
       time: 4800, sub: "NEW HOME - THE JUDGMENT HALL" }
   ];
 
@@ -2247,10 +2241,20 @@ function notify_config_change() {
     L[9] = b.xp;
     L[10] = b.gold;
     L[11] = b.kills;
-    /* 12..27: item[i], phone[i] interleaved (i = 0..7) */
+    /* 12..27: item[i], phone[i] interleaved (i = 0..7). phone[] holds the
+       CELL menu apps - ids from the game's own phonename table
+       (lang_en.json): 206 "Toriel's Phone" (picked up with the phone in the
+       Ruins), 210 "Papyrus's Phone" (after his Snowdin date), 220/221
+       "Dimensional Box A/B" (Alphys' upgrades replace the phone, dropping
+       the old contact apps - exactly like the real routes). v2.0: a boss
+       state used to ship phone[] = all 0 - a save the real game can never
+       produce, because the CELL button only unlocks once you own the phone,
+       and owning the phone means at least app 206. With menuchoice forced
+       to 1,1,1 (v1.9) the CELL button was visible over an empty app list:
+       the one menu that was still broken. */
     for (var i = 0; i <= 7; i++) {
       L[12 + 2 * i] = (b.items && b.items[i]) || 0;
-      L[13 + 2 * i] = 0;
+      L[13 + 2 * i] = (b.phone && b.phone[i]) || 0;
     }
     L[28] = b.weapon;
     L[29] = b.armor;
@@ -2809,9 +2813,11 @@ var UTFONT = {
       var sel = S.bossSel === idx;
       if (sel) heart(58, y + 5, 2, COL.red);
       var rc = routeColor(b.route);
-      /* v1.9: LV 1 states with zero kills are pacifist saves - don't
-         brand them "NEU" like a neutral-route file (user request) */
-      if (b.kills > 0 || b.lv > 1) text(b.route.slice(0, 3), 92, y, 2, rc);
+      /* v2.0: every state gets its route chip - PACI for the zero-kill
+         pacifist saves (blue), GEN for genocide (red), NEU for a
+         neutral file (white). Nothing is left un-labeled. */
+      var chip = b.route === "PACIFIST" ? "PACI" : (b.route === "GENOCIDE" ? "GEN" : "NEU");
+      text(chip, 92, y, 2, rc);
       text(b.name, 92 + textW("GEN", 2) + 20, y, 2, sel ? COL.sel : COL.white);
       var lvTxt = "LV " + b.lv;
       text(lvTxt, 480 - textW(lvTxt, 2), y, 2, sel ? COL.sel : COL.white);
@@ -2821,10 +2827,8 @@ var UTFONT = {
 
     var cur = bl[S.bossSel];
     if (cur) {
-      /* v1.9: an LV 1 state with zero kills is a pacifist save */
-      var pacifist = cur.kills === 0 && cur.lv === 1;
       var d = cur.sub + "   " + (cur.route === "GENOCIDE" ? "GENOCIDE ROUTE"
-        : pacifist ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
+        : cur.route === "PACIFIST" ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
       text(d.slice(0, 62), 58, 340, 1, COL.hint);
     }
     if (bl.length > 7) {
