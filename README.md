@@ -312,6 +312,13 @@ values the game applies, and the bonuses are re-derived from your current
 gear wherever it matters — healing items, the damage/i-frame calculation
 and the item menu all agree. (game data v1.7)
 
+*(v1.9: the pause menu's stats strip shows your set's bonus live — that
+includes the heal sets' "ITEMS HEAL +5/+10" and the i-frame set's
+"I-FRAMES +60%". The game's own STAT page shows the stat sets' ATK/DF
+bonuses folded into its AT/DF numbers, the same way the original game
+folds weapon bonuses; it has no dedicated line for heal/INV sets, and
+adding one would mean creating a new callable script in the game data.)*
+
 **More Sans death dialogue (genocide route).** Sans's rematch intro now has
 unique lines for deaths 12 through 17 — he used to run out of material after
 11 — and past 18 deaths he rotates through a set of one-liners instead of
