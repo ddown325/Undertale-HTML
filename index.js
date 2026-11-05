@@ -2048,7 +2048,10 @@ function notify_config_change() {
       flags: fl
     };
     info.murderlv = murderlv(fl);
-    info.route = info.kills === 0 ? "PACIFIST" : (info.murderlv >= 1 ? "GENOCIDE" : "NEUTRAL");
+    info.route = info.kills === 0 ? "NEUTRAL" : (info.murderlv >= 1 ? "GENOCIDE" : "NEUTRAL");
+    /* v2.1: a zero-kill file is NEUTRAL, not PACIFIST - true pacifist needs
+       the whole friendship chain (dates, Undyne hangout, True Lab). Only
+       the shipped ASRIEL state is a real PACIFIST save. */
     info.roomName = ROOMS[info.room] || ("room " + info.room);
     info.area = areaOf(info.roomName);
     info.boss = bossOf(info);
@@ -2128,33 +2131,40 @@ function notify_config_change() {
   }
 
   /* ---------- boss table (ids = save slots) ----------
-     v2.0: every state now carries BOTH equipment slots AND all 8 item
-     slots filled with heals (user request: '2 items equipped and 8 heals'),
-     with multiples of the good stuff - more than one Butterscotch Pie,
-     Instant Noodles and Snowman Pieces. Noodles heal the way they always
-     did (90 HP in a serious/genocide fight, small elsewhere) - NO game-data
-     changes to item behavior. Zero-kill states are labeled
-     PACIFIST ('PACI') instead of the old blank chip. */
+     v2.1 inventory rules (user request: research the proper heals per
+     fight, no impossible dupes):
+       - Butterscotch Pie x1 max (one per run, from Toriel's kitchen)
+       - Snowman Piece x1 max carried (the snowman refuses a second;
+         he only re-gifts one if you LOST yours)
+       - Instant Noodles x1 max (one fridge take in the MTT Resort
+         restaurant; no shop sells them) - never before Mettaton EX
+       - Cinnamon Bun / Nice Cream / Sea Tea / Crab Apple / Spider
+         Donut & Cider / Monster Candy = shop-bought, multiples legit
+         (candy bowl: genocide caps you at 3 pieces)
+       - Legendary Hero / Starfait / Glamburger (Burger Emporium),
+         Face Steak (emporium, 500G) - post-Hotland only
+     Zero-kill states are labeled NEUTRAL (true pacifist needs the whole
+     friendship chain - only the ASRIEL state is a real PACIFIST save). */
   var BOSSES = [
     { id: "toriel",   name: "TORIEL",               area: "RUINS EXIT",
-      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 25,
+      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 25,
       room: 42,  plot: 24,
       weapon: 13, armor: 12, wstrength: 3,  adef: 3,      /* Toy Knife + Faded Ribbon */
-      items: [11, 11, 7, 7, 1, 1, 21, 21],   /* 2x Butterscotch Pie, 2x Spider Donut, 2x Monster Candy, 2x Cinnamon Bun */
+      items: [11, 1, 1, 7, 7, 10, 10, 1],    /* Butterscotch Pie, 2x Monster Candy (bowl), 2x Spider Donut (8G), 2x Spider Cider (18G), Monster Candy */
       phone: [206],                           /* Toriel's Phone - picked up at the flower patch */
       time: 900, sub: "RUINS - THE EXIT" },
     { id: "papyrus",  name: "PAPYRUS",              area: "SNOWDIN FOREST",
-      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 60,
+      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 60,
       room: 82,  plot: 100,
       weapon: 14, armor: 15, wstrength: 5,  adef: 7,     /* Tough Glove + Bandanna */
-      items: [11, 11, 16, 16, 21, 21, 17, 17],        /* 2x Pie, 2x Snowman Piece, 2x Cinnamon Bun, 2x Nice Cream */
+      items: [11, 16, 17, 21, 19, 1, 7, 10], /* Pie kept, 1x Snowman Piece, Nice Cream, Cinnamon Bun, Bisicle (Snowdin shop), Monster Candy, Spider Donut, Spider Cider */
       phone: [206],                           /* before the Papyrus date - his number not yet added */
       time: 1800, sub: "SNOWDIN - THE FOG" },
     { id: "undyne",   name: "UNDYNE",               area: "WATERFALL",
-      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 120,
+      route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 120,
       room: 135, plot: 121,
       weapon: 25, armor: 24, wstrength: 7,  adef: 10,    /* Ballet Shoes + Old Tutu */
-      items: [11, 11, 16, 16, 41, 41, 21, 21],        /* 2x Pie, 2x Snowman Piece, 2x Sea Tea, 2x Cinnamon Bun */
+      items: [11, 16, 21, 41, 41, 37, 17, 1],/* Pie, Snowman Piece, Cinnamon Bun, 2x Sea Tea (Gerson), Crab Apple (Gerson), Nice Cream, Monster Candy */
       phone: [206, 210],                     /* Toriel's + Papyrus's numbers */
       time: 2400, sub: "WATERFALL - THE YARD" },
     { id: "undyneut", name: "UNDYNE THE UNDYING",   area: "WATERFALL",
@@ -2162,14 +2172,14 @@ function notify_config_change() {
       room: 132, plot: 114,                       /* room_water19 - the bridge  */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER]),
       weapon: 25, armor: 24, wstrength: 7,  adef: 10,
-      items: [11, 11, 16, 16, 36, 36, 41, 41],        /* 2x Pie, 2x Snowman, 2x Instant Noodles (90 HP - serious mode), 2x Sea Tea */
+      items: [11, 16, 41, 41, 37, 1, 1, 7],   /* Pie kept, 1x Snowman Piece, 2x Sea Tea (Gerson stays in genocide), Crab Apple, 2x Monster Candy (bowl cap 3 in hellish world), Spider Donut */
       phone: [206],                           /* genocide: no friends, no upgrades */
       time: 3000, sub: "WATERFALL - THE BRIDGE" },
     { id: "mettatonex", name: "METTATON EX",        area: "THE CORE",
-      route: "PACIFIST", lv: 12, xp: 2500,  kills: 0,   gold: 240,  /* LV12 = 2500 xp */
+      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 240,  /* LV12 = 2500 xp */
       room: 212, plot: 197,                      /* room_fire_core_metttest - the stage */
       weapon: 47, armor: 46, wstrength: 10, adef: 11,   /* Burnt Pan + Stained Apron */
-      items: [11, 11, 36, 36, 43, 43, 61, 61],        /* 2x Pie, 2x Instant Noodles, 2x Legendary Hero, 2x Face Steak */
+      items: [11, 16, 36, 43, 40, 42, 38, 21], /* Pie, Snowman Piece, Instant Noodles (the one restaurant-fridge take - first fight they can exist at), Legendary Hero, Glamburger, Starfait, Hot Dog...?, Cinnamon Bun */
       phone: [220],                           /* Alphys' upgrade: Dimensional Box A (contact apps replaced) */
       time: 3600, sub: "THE CORE - THE STAGE" },
     { id: "mettatonneo", name: "METTATON NEO",      area: "THE CORE",
@@ -2183,16 +2193,25 @@ function notify_config_change() {
                               why you spawned 'at the two guards') */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND]),
       weapon: 47, armor: 46, wstrength: 10, adef: 11,
-      items: [11, 11, 36, 36, 43, 43, 61, 61],        /* 2x Pie, 2x Instant Noodles (90 HP - serious mode), 2x Legendary Hero, 2x Face Steak */
+      items: [11, 16, 36, 43, 43, 41, 41, 40],/* Pie kept, 1x Snowman Piece, the one Instant Noodles take, 2x Legendary Hero (emporium open in genocide - burgerpants stayed), 2x Sea Tea, Glamburger (trash can find) */
       phone: [206],                           /* genocide: no friends, no upgrades */
       time: 3900, sub: "THE CORE - THE STAGE" },
     { id: "asgore",   name: "ASGORE",               area: "THE BARRIER",
-      route: "PACIFIST", lv: 12, xp: 2500,  kills: 0,   gold: 300,
+      route: "NEUTRAL", lv: 12, xp: 2500,  kills: 0,   gold: 300,
       room: 238, plot: 208,
       weapon: 49, armor: 48, wstrength: 12, adef: 12,   /* Empty Gun AT12 + Cowboy Hat DF12 */
-      items: [11, 11, 36, 36, 43, 43, 61, 61],        /* 2x Pie, 2x Instant Noodles, 2x Legendary Hero, 2x Face Steak */
+      items: [11, 16, 36, 43, 43, 61, 41, 21],/* Pie, Snowman Piece, the one Instant Noodles, 2x Legendary Hero, 1x Face Steak (500G - one is all a wallet survives), Sea Tea, Cinnamon Bun */
       phone: [220, 221],                     /* Dimensional Box A + B (post-EX-fight upgrade) */
       time: 4200, sub: "NEW HOME - THE BARRIER" },
+    { id: "asriel",   name: "ASRIEL DREEMURR",      area: "THE TRUE FINALE",
+      route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 300,  /* a real true-pacifist run: LV1 all game */
+      room: 334, plot: 235,                      /* room_asrieltest - the Asriel fight room;
+                                                 plot may need tuning to the trigger's
+                                                 exact gate on first live test */
+      weapon: 51, armor: 50, wstrength: 15, adef: 15,   /* Worn Dagger AT15 + Heart Locket DF15 - New Home's pacifist gear, the Determination set ("best i-frame set": locket + dagger is the strongest true-pacifist loadout) */
+      items: [11, 16, 43, 61, 42, 21, 41, 17],/* Pie kept all game, Snowman Piece, Legendary Hero, Face Steak, Starfait, Cinnamon Bun, Sea Tea, Nice Cream - no Instant Noodles (they only heal 4 outside serious mode) */
+      phone: [220, 221],                     /* Dimensional Box A + B */
+      time: 6600, sub: "THE TRUE PACIFIST FINALE" },
     { id: "sans",     name: "SANS",                 area: "THE LAST CORRIDOR",
       route: "GENOCIDE", lv: 19, xp: 50000, kills: 109, gold: 120,  /* FTM's Sans preset values */
       room: 231, plot: 199,   /* v2.0: room_lastruins_corridor + plot 199 -
@@ -2203,7 +2222,7 @@ function notify_config_change() {
                               inside the trigger's mask). */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND, GEN_ENDGAME]),
       weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
-      items: [11, 11, 36, 36, 43, 61, 16, 16],        /* 2x Pie, 2x Instant Noodles (90 HP - serious mode), Legendary Hero, Face Steak, 2x Snowman Piece */
+      items: [11, 16, 36, 43, 61, 41, 41, 37],/* Pie kept, 1x Snowman Piece, the one Instant Noodles (90 HP in serious mode), Legendary Hero, Face Steak, 2x Sea Tea, Crab Apple */
       phone: [206],                           /* genocide: no friends, no upgrades */
       time: 4800, sub: "NEW HOME - THE JUDGMENT HALL" }
   ];
