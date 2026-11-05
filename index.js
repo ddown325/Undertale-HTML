@@ -2265,7 +2265,14 @@ function notify_config_change() {
       L[30 + 312 + s] = boxB[s] || 0;
     }
     L[542] = b.plot;
-    L[543] = 0; L[544] = 0; L[545] = 0;   /* menuchoice */
+    /* v1.9: menuchoice[0..2] gate the ITEM/STAT/CELL buttons in the actual
+       game menu (obj_overworldcontroller_Draw only draws a button when its
+       menuchoice slot == 1). Every built state had 0,0,0 there, so loading
+       a boss state gave you a menu with an invisible button row - you
+       could move the SOUL between three buttons you could not see, and
+       never reach the ITEM or STAT pages. Every state we ship sits past
+       the phone pickup, so all three buttons are unlocked: 1,1,1. */
+    L[543] = 1; L[544] = 1; L[545] = 1;
     L[546] = 0;                           /* currentsong */
     L[547] = b.room;
     L[548] = b.time;
@@ -2485,12 +2492,34 @@ function notify_config_change() {
     var keep = stashOldGear(b);
     var file0 = buildFile0(b, name, keep);
     var ini = buildIni(b, name, typeof existingIni === "string" ? existingIni : null);
-    var ts = Date.now();
     return buildSavedata({
       "file0": file0,
       "file9": file0,               /* temp-save: CONTINUE after death */
       "undertale.ini": ini
     }).then(function (savJson) {
+      /* v1.9: DEFERRED WRITE. Writing while the runner is live loses a
+         race with its own teardown: as the page unloads, the runner's
+         syncfs can flush the OLD in-memory savedata back over the fresh
+         records - and you boot straight back into the previous save
+         (that is what made boss states "not take" when picked from the
+         in-game pause menu). Instead: build the three finished texts
+         NOW, stash them in sessionStorage, reload, and let index.html's
+         inline module (runs at page parse, before the runner mounts)
+         write them. The dying page can not clobber what it never races. */
+      var stashed = false;
+      try {
+        sessionStorage.setItem("utBossWrite", JSON.stringify({
+          label: b.name, file0: file0, ini: ini, sav: savJson
+        }));
+        stashed = true;
+      } catch (eStash) { stashed = false; }
+      if (stashed) {
+        console.log("[UTBossStates] " + b.name + " state built - reloading to write it safely");
+        setTimeout(function () { window.location.reload(); }, 150);
+        return { boss: b, name: name, deferred: true };
+      }
+      /* sessionStorage unavailable (rare embeds): old immediate write */
+      var ts = Date.now();
       var jobs = [
         writeGameFile("undertale.sav", savJson + "\u0000", ts),
         writeGameFile("file0", file0, ts),       /* kept as real files too, harmless */
@@ -2747,7 +2776,8 @@ var UTFONT = {
     var title = "PAUSED";
     text(title, 320 - textW(title, 3) / 2, 106, 3, COL.white);
 
-    var items = ["RESUME", "BOSS STATES", "FULLSCREEN", "QUIT"];
+    var items = ["RESUME", "BOSS STATES", "QUIT"];   /* v1.9: FULLSCREEN removed
+       from the menu per request - F4 still toggles it anywhere */
     var y = 152;
     for (var i = 0; i < items.length; i++) {
       y = menuRow(96, y, items[i], S.sel === i);
@@ -2779,7 +2809,9 @@ var UTFONT = {
       var sel = S.bossSel === idx;
       if (sel) heart(58, y + 5, 2, COL.red);
       var rc = routeColor(b.route);
-      text(b.route.slice(0, 3), 92, y, 2, rc);
+      /* v1.9: LV 1 states with zero kills are pacifist saves - don't
+         brand them "NEU" like a neutral-route file (user request) */
+      if (b.kills > 0 || b.lv > 1) text(b.route.slice(0, 3), 92, y, 2, rc);
       text(b.name, 92 + textW("GEN", 2) + 20, y, 2, sel ? COL.sel : COL.white);
       var lvTxt = "LV " + b.lv;
       text(lvTxt, 480 - textW(lvTxt, 2), y, 2, sel ? COL.sel : COL.white);
@@ -2789,8 +2821,10 @@ var UTFONT = {
 
     var cur = bl[S.bossSel];
     if (cur) {
+      /* v1.9: an LV 1 state with zero kills is a pacifist save */
+      var pacifist = cur.kills === 0 && cur.lv === 1;
       var d = cur.sub + "   " + (cur.route === "GENOCIDE" ? "GENOCIDE ROUTE"
-        : cur.route === "PACIFIST" ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
+        : pacifist ? "PACIFIST ROUTE" : "NEUTRAL ROUTE");
       text(d.slice(0, 62), 58, 340, 1, COL.hint);
     }
     if (bl.length > 7) {
@@ -2912,8 +2946,7 @@ var UTFONT = {
   function mainAction(i) {
     if (i === 0) close();
     else if (i === 1) { S.mode = "boss"; S.bossSel = 0; S.bossScroll = 0; }
-    else if (i === 2) { if (window.UTFullscreen) window.UTFullscreen.toggle(); }
-    else if (i === 3) {
+    else if (i === 2) {
       S.confirm = { kind: "quit", yes: false };
       S.mode = "confirm";
     }
@@ -2938,8 +2971,8 @@ var UTFONT = {
     var k = e.key;
     var handled = true;
     if (S.mode === "main") {
-      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 3) % 4;
-      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 4;
+      if (k === "ArrowUp" || k === "w" || k === "W") S.sel = (S.sel + 2) % 3;
+      else if (k === "ArrowDown" || k === "s" || k === "S") S.sel = (S.sel + 1) % 3;
       else if (k === "Enter" || k === "z" || k === "Z" || k === " ") mainAction(S.sel);
       else if (k === "Escape" || k === "x" || k === "X") close();
       else handled = false;

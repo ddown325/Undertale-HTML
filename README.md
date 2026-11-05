@@ -124,6 +124,50 @@ worker re-checks for updates on every visit and revalidates shell files
 with `cache: 'no-cache'` — a stale cached `index.js` could previously make
 you run pre-fix save code for up to 10 minutes after a deploy.
 
+**v1.9 — THE "hit twice / Sans crashes" black-screen class is dead.** Every
+crash you could repro was one root cause with two faces, plus one crash
+trap in the Harder Sans plumbing, all found by diffing the rebuilt
+bytecode against the originals instruction-by-instruction:
+
+1. **"Getting hit twice crashes the game" (Undyne with Ballet Shoes +
+   Old Tutu, Sans, everywhere).** The v1.7/v1.8 blob rebuilds inserted
+   code mid-script, and every branch that sat *before* an insertion but
+   jumped *across* it kept its original target — landing mid-operand,
+   executing raw bytes as bytecode, fatal error, black screen. The
+   i-frames check in `scr_damagestandard` was exactly such a branch
+   (hit while invincible = hit twice = crash), and the INV set makes
+   your i-frames 60% longer, so the crash clustered there. 17 un-shifted
+   branches fixed across `scr_damagestandard`, the menu bones, the
+   bone/blaster karma event (6) and the Sans fight's KR-drain draw (7,
+   every frame while karma is on you).
+2. **Harder Sans's trigger read `hardmode.flag` with no default.** When
+   the flag is missing (the old offline build! blocked IndexedDB!) it
+   read `global.death_t` before anything had written it — fatal "global
+   variable not set" on entering the corridor. The trigger was rebuilt:
+   default 1 first, then read the flag straight from the savedata map
+   (no `ossafe` file handles at all — Undertale's `ossafe_close` ignores
+   its argument and would have destroyed the game's live file handle),
+   `is_undefined`-guarded, `max(x,1)`-clamped.
+3. **Boss states picked from the in-game pause menu could "not take"**
+   — you reloaded into your *previous* save. The write raced the dying
+   page's own teardown sync, which flushed the old in-memory savedata
+   over the fresh records. States are now *built* at selection, stashed,
+   and written at the next page parse — before the runner mounts, where
+   nothing can race them. (Verified end-to-end in a live browser.)
+4. **The game's own ITEM / STAT / CELL buttons were invisible** on every
+   save the menu built: the game only draws a button when its
+   `menuchoice` slot is 1, and the builder wrote 0,0,0. You could move
+   the SOUL between three buttons you could not see, and never reach the
+   item or stat pages. All three slots now write 1 (every state ships
+   past the phone pickup, same as a real save).
+
+Also in v1.9: the rebuilt game data keeps the FORM/AUDO chunk headers the
+runner validates consistent, the pause menu's FULLSCREEN entry is gone
+(F4 still works), LV 1 / zero-kill states are labelled PACIFIST instead
+of branded "NEU", and the offline single-file edition is rebuilt from
+this exact data (its stale predecessor crashed at the corridor because
+of bug 2 above — `hardmode.flag` never existed offline).
+
 **v1.8 — the crash fixes.** Three crash classes, all rooted in the same
 save plumbing, are dead now:
 
@@ -288,7 +332,7 @@ and all), the red SOUL as the cursor, selected entries in yellow, and a live
 stats strip (name, LV, HP and route state). It sits on a 640x480 canvas
 pinned to the game canvas, so it shares the game's pixel grid and scale:
 
-    RESUME   BOSS STATES   FULLSCREEN   QUIT
+    RESUME   BOSS STATES   QUIT
 
 **BOSS STATES** is the skip-to-a-fight list described above (each entry shows
 its route tag, LV and location; the selected fight gets a confirmation box

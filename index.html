@@ -173,7 +173,7 @@ window.__ring = [];
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
-        <span>v1.8</span>
+        <span>v1.9</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
@@ -604,6 +604,70 @@ window.__ring = [];
       })();
 
       /* ==========================================================
+       *  v1.9 - BOSS STATE PENDING WRITE (the "state did not take" fix)
+       *  ----------------------------------------------------------
+       *  Boss states used to be written by index.js while the runner
+       *  was still live; the dying page's teardown syncfs could then
+       *  flush the OLD in-memory savedata back over the fresh records,
+       *  so the next boot continued the PREVIOUS save instead of the
+       *  boss you picked. index.js now only BUILDS the state (file0 /
+       *  undertale.ini / the merged undertale.sav map) and stashes the
+       *  three finished texts in sessionStorage; this module writes
+       *  them here, at page parse - before the runner even exists, so
+       *  nothing can race or clobber them, and the runner mounts the
+       *  new state directly.
+       * ========================================================== */
+      (function applyPendingBossWrite() {
+        var raw = null;
+        try { raw = sessionStorage.getItem('utBossWrite'); } catch (e) { return; }
+        if (!raw) return;
+        try { sessionStorage.removeItem('utBossWrite'); } catch (e2) {}
+        var p = null;
+        try { p = JSON.parse(raw); } catch (e3) { return; }
+        if (!p || !p.file0) return;
+        var ts = Date.now();
+        var enc = function (text) { return new TextEncoder().encode(text); };
+        var b64 = function (bytes) {
+          var s = '';
+          for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+          return btoa(s);
+        };
+        /* keep the localStorage mirror the pause menu / helpers read in
+           step with the database (the periodic mirror would catch up in
+           up to 10 s - not good enough right after a state switch) */
+        var mirror = function (name, text) {
+          try {
+            var key = 'ut/_savedata/' + name;
+            localStorage.setItem(key,
+              'OBJ:{"contents":"AB:' + b64(enc(text)) +
+              '","mode":"JS:33206","timestamp":"DATE:' + ts + '"}');
+            localStorage.setItem(key + '::ts', String(ts));
+          } catch (e4) {}
+        };
+        var store = window.oprt && window.oprt.gameStorage &&
+                     window.oprt.gameStorage.open('/_savedata');
+        if (store) {
+          var put = function (key, text) {
+            return store.put({ timestamp: new Date(ts), mode: 33206,
+                               contents: enc(text) }, key);
+          };
+          Promise.all([
+            put('/_savedata/undertale.sav', p.sav + '\u0000'),
+            put('/_savedata/file0', p.file0),
+            put('/_savedata/undertale.ini', p.ini)
+          ]).then(function () {
+            mirror('undertale.sav', p.sav + '\u0000');
+            mirror('file0', p.file0);
+            mirror('undertale.ini', p.ini);
+            console.log('[UTBossStates] wrote ' + (p.label || 'boss') +
+                        ' state at boot (undertale.sav + file0/ini) - CONTINUE starts at the boss');
+          }, function (err) {
+            console.log('[UTBossStates] pending boss state write FAILED:', err);
+          });
+        }
+      })();
+
+      /* ==========================================================
        *  CONFIG - bump CACHE_VERSION whenever you update any game
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
@@ -618,7 +682,7 @@ window.__ring = [];
         'game.unx.part2': 19993648,
         'game.unx.part3': 19993648,
         'game.unx.part4': 19993648,
-        'game.unx.part5': 20037976,
+        'game.unx.part5': 20038184,
         'runner.wasm': 5645898,
         'runner.data': 12561615,
         'audio-worklet.js': 491,
