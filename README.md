@@ -24,6 +24,50 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.3 — the nine-fix pass: Asriel state fixed, corridor cutscene restored,
+set bonus finished, texts polished.**
+
+1. **ASRIEL boss state works now.** The state saves into `room_asrieltest`
+   (room 334), which fails `scr_dogcheck`'s valid-room range check (5–266)
+   and dumped you into `room_of_dog` instead of the fight. The game data now
+   whitelists the room, and the state ships the true-lab friendship flag
+   (`flag[493] = 12`) so it really is the pacifist-finale save it claims.
+2. **The Sans judgment cutscene plays again.** v2.1's "speech-skip +
+   instant battler" edit left the Last Corridor trigger starting the battle
+   on the first frame — unguarded, so it re-ran every tick — and the extra
+   death-count dialogue was dead code. The trigger is back to vanilla flow:
+   walk in, the speech plays (death-count lines included), then Megalovania.
+3. **Ballet Shoes + Old Tutu set bonus is real and labeled.** The i-frame
+   set now grants **INV +30** after every hit (was +12 while the equip
+   message claimed +30), covers the ~16 mod-added bullet types that bypassed
+   `scr_damagestandard`, and both item descriptions state
+   **SET BONUS (CUSTOM)** in EN and JA. The pause menu's set readout matches.
+4. **Heal values verified against the wiki** — every consumable already
+   matched (pie full, noodles 90/15/4 by context, snowman 45, dog salad
+   2/10/30/MAX...). The two text lies are fixed: Last Dream's description
+   said 12 HP (heals 17, now also named "Last Dream"), and the Cinnamon
+   Bunny was misnamed "Cinnamon Bun" (battle name now "CinnaBun").
+5. **Sans's extra death-count texts (12–17 deaths) rewritten** in the
+   requested tone — he hates you for emptying the underground, never says
+   it outright, and is having the time of his life killing you over and
+   over — plus the 18+ random pool, and a stray `%%` that cut off the
+   "again." beat on death 17.
+6. **PACI labels are back.** A zero-kill file is LV1 by definition, so the
+   pause menu badges it PACI (blue) again instead of NEUTRAL.
+7. **Faster boot.** `index.js`/`runner.js` prefetch in parallel with the
+   game data, and the `lang/*.json` mirrors (pure reference — the game
+   reads its text from data compiled into `game.unx`) load in the
+   background instead of blocking the loader.
+8. **Quieter console.** The wasm audio engine's
+   "Prevented call into an uninitialised yyal" spam is filtered (the
+   runner already guards the actual call). The old `.ck`/timestamp crashes
+   from error.txt were already fixed by the v1.9 runner armor — verified
+   still in place.
+9. **lang/*.json regenerated** from the game data's own text tables, so
+   the reference mirrors match the shipped text exactly (they were missing
+   the v1.1 Sans additions entirely), and the runner cache manifest's MD5
+   list is recomputed. `CACHE_VERSION → v2.3`.
+
 **v2.0 — Megalovania plays again, and Harder Sans is music-only.** The v1.8
 Harder Sans shipped a game-data hook: the Last Corridor trigger read a
 `hardmode.flag` from the save DB to scale Sans's karma damage ×1.3. That hook

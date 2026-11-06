@@ -126,6 +126,26 @@ window.__ring = [];
     </style>
   </head>
   <body>
+    <script>
+      /* v2.3: the wasm audio engine logs "Warning: Prevented call into an
+         uninitialised yyal from Audio_EngineInvokeCallback" hundreds of
+         times while the audio context is not yet running. The runner
+         already guards the actual call - the log line is pure console
+         noise. Filter exactly that message; everything else passes. */
+      (function () {
+        var NOISE = /Prevented call into an uninitialised yyal/;
+        ['log', 'warn'].forEach(function (fn) {
+          var orig = console[fn] && console[fn].bind(console);
+          if (!orig) return;
+          console[fn] = function () {
+            for (var i = 0; i < arguments.length; i++) {
+              if (typeof arguments[i] === 'string' && NOISE.test(arguments[i])) return;
+            }
+            return orig.apply(null, arguments);
+          };
+        });
+      })();
+    </script>
     <canvas id="canvas" class="emscripten" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
 
 
@@ -633,7 +653,7 @@ window.__ring = [];
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v2.2';
+      var CACHE_VERSION = 'v2.3';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no
@@ -643,15 +663,19 @@ window.__ring = [];
         'game.unx.part2': 19993648,
         'game.unx.part3': 19993648,
         'game.unx.part4': 19993648,
-        'game.unx.part5': 19993652,
+        'game.unx.part5': 19996084,
         'runner.wasm': 5645898,
         'runner.data': 12561615,
-        'audio-worklet.js': 491,
-        'lang/lang_en.json': 1088014,
-        'lang/lang_ja.json': 1576330
+        'audio-worklet.js': 491
       };
       var PARTS = ['game.unx.part1', 'game.unx.part2', 'game.unx.part3', 'game.unx.part4', 'game.unx.part5'];
-      var RUNTIME = ['runner.wasm', 'runner.data', 'audio-worklet.js', 'lang/lang_en.json', 'lang/lang_ja.json'];
+      var RUNTIME = ['runner.wasm', 'runner.data', 'audio-worklet.js'];
+      /* v2.3: lang/*.json are reference mirrors of the text compiled into
+         game.unx - the game itself never reads them (scr_gettext reads the
+         in-data ds_maps), so they no longer block the boot. They are
+         fetched in the background after the game starts, purely to keep
+         the offline cache complete; the VFS serves a valid empty stub. */
+      var LAZY = ['lang/lang_en.json', 'lang/lang_ja.json'];
       /* v2.0: computed from SIZES so the progress bar can never drift out
          of sync with a shard resize again */
       var TOTAL_BYTES = 0;
@@ -893,6 +917,13 @@ window.__ring = [];
       /* ---------------- main ---------------- */
       async function main() {
         registerSW();
+        /* v2.3: prefetch the boot scripts in parallel with the 100 MB of
+         * game data - index.js revalidates cheaply (network-first in the
+         * SW) and runner.js lands in the SW cache before the boot needs
+         * it. Failures are ignored; the normal script tags still work. */
+        ['index.js', 'runner.js'].forEach(function (n) {
+          fetch(n).catch(function () {});
+        });
         try {
           /* all downloads in parallel - progress is byte-exact across them */
           var names = PARTS.concat(RUNTIME);
@@ -910,8 +941,25 @@ window.__ring = [];
           VFS['runner.wasm'] = URL.createObjectURL(new Blob([results['runner.wasm']], { type: 'application/wasm' }));
           VFS['runner.data'] = URL.createObjectURL(new Blob([results['runner.data']], { type: 'application/octet-stream' }));
           VFS['audio-worklet.js'] = URL.createObjectURL(new Blob([results['audio-worklet.js']], { type: 'text/javascript' }));
-          VFS['lang_en.json'] = URL.createObjectURL(new Blob([results['lang/lang_en.json']], { type: 'application/json' }));
-          VFS['lang_ja.json'] = URL.createObjectURL(new Blob([results['lang/lang_ja.json']], { type: 'application/json' }));
+          /* v2.3: stub the lang mirrors (nothing in the game reads them);
+             the real files are background-fetched below for the offline
+             cache and swapped in when they arrive. */
+          VFS['lang_en.json'] = URL.createObjectURL(new Blob(['{}'], { type: 'application/json' }));
+          VFS['lang_ja.json'] = URL.createObjectURL(new Blob(['{}'], { type: 'application/json' }));
+          var langLoaded = false;
+          var swapLang = function () {
+            if (langLoaded) return;
+            langLoaded = true;
+            LAZY.forEach(function (n) {
+              fetch(n).then(function (r) {
+                if (!r.ok) return;
+                return r.arrayBuffer().then(function (buf) {
+                  var key = n.indexOf('_ja') >= 0 ? 'lang_ja.json' : 'lang_en.json';
+                  VFS[key] = URL.createObjectURL(new Blob([buf], { type: 'application/json' }));
+                });
+              }).catch(function () {});
+            });
+          };
 
           /* v1.8 - HARDER SANS: on the winning roll, load the alternate
            * megalovania now and serve it whenever the runner asks for the
@@ -937,6 +985,11 @@ window.__ring = [];
 
           installInterceptors();
           startRunnerScripts();
+
+          /* v2.3: with the game running, finish the offline cache in the
+           * background - the SW stores the lang mirrors so offline boots
+           * have the same file set as before. */
+          setTimeout(swapLang, 3000);
         } catch (err) {
           console.error(err);
           fail('DOWNLOAD FAILED');

@@ -951,7 +951,7 @@ function manifestFilesMD5()
 "1647d3ad4762cc3e78e490b208a878a2",
 "f71a3a6a351db50641cec0b037fb7aa3",
 "e8f1e8db8cf996f8715a6f2164c2e44e",
-"e07719cee5a04302565486e382d4ed6a",
+"c6dcd2c97da6acd10b5ac75e94a13a99",
 "da78df4767592b0759de45f1a97f7c05",
 "bc7c594cda5c6c1b0276fb86a11e175b",
 "41833545251f09c1bec5c6dc9075c2d9",
@@ -1164,8 +1164,8 @@ function manifestFilesMD5()
 "3ea95393e37003490ed3707d3e9276f7",
 "fc49ca134bbec186ac6b849740d208a8",
 "68d404e8253721ac67ee2d530f837d91",
-"5fe2c21c5239c9565c9e2c48b4b47566",
-"6f8fab82c16339552993ac103942f632" ];
+"073da3cf52b8b9f48127f30f3f5dba1d",
+"bd26e573baff689c3f6bcfb6cf9793b5" ];
 }
 
 function onFirstFrameRendered()
@@ -2048,10 +2048,11 @@ function notify_config_change() {
       flags: fl
     };
     info.murderlv = murderlv(fl);
-    info.route = info.kills === 0 ? "NEUTRAL" : (info.murderlv >= 1 ? "GENOCIDE" : "NEUTRAL");
-    /* v2.1: a zero-kill file is NEUTRAL, not PACIFIST - true pacifist needs
-       the whole friendship chain (dates, Undyne hangout, True Lab). Only
-       the shipped ASRIEL state is a real PACIFIST save. */
+    /* v2.3: zero-kill files are LV1 by definition (no EXP without kills),
+       so the ESC menu labels them PACI again - per user request, reverting
+       the v2.1 NEUTRAL labeling. A file with kills but no murderlv chain
+       stays NEUTRAL; genocide chain detection is unchanged. */
+    info.route = info.kills === 0 ? "PACIFIST" : (info.murderlv >= 1 ? "GENOCIDE" : "NEUTRAL");
     info.roomName = ROOMS[info.room] || ("room " + info.room);
     info.area = areaOf(info.roomName);
     info.boss = bossOf(info);
@@ -2149,8 +2150,9 @@ function notify_config_change() {
          (candy bowl: genocide caps you at 3 pieces)
        - Legendary Hero / Starfait / Glamburger (Burger Emporium),
          Face Steak (emporium, 500G) - post-Hotland only
-     Zero-kill states are labeled NEUTRAL (true pacifist needs the whole
-     friendship chain - only the ASRIEL state is a real PACIFIST save). */
+     v2.3: zero-kill states are labeled PACI (zero kills is LV1 by
+     definition - no EXP without kills). The ASRIEL state additionally
+     carries the true-lab friendship flag. */
   var BOSSES = [
     { id: "toriel",   name: "TORIEL",               area: "RUINS EXIT",
       route: "NEUTRAL", lv: 1,  xp: 0,     kills: 0,   gold: 25,
@@ -2211,21 +2213,32 @@ function notify_config_change() {
       time: 4200, sub: "NEW HOME - THE BARRIER" },
     { id: "asriel",   name: "ASRIEL DREEMURR",      area: "THE TRUE FINALE",
       route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 300,  /* a real true-pacifist run: LV1 all game */
-      room: 334, plot: 235,                      /* room_asrieltest - the Asriel fight room;
-                                                 plot may need tuning to the trigger's
-                                                 exact gate on first live test */
+      room: 334, plot: 235,                      /* room_asrieltest - the Asriel fight room.
+                                                 v2.3: scr_dogcheck now whitelists
+                                                 room_asrieltest, so this room is a
+                                                 legal save target (it used to fail
+                                                 the dogcheck range check and dump
+                                                 you in room_of_dog). plot is inert
+                                                 here - nothing gates on 235. */
+      flags: { 493: 12 },                        /* true lab complete - the friendship
+                                                 chain a real pacifist save carries */
       weapon: 51, armor: 50, wstrength: 15, adef: 15,   /* Worn Dagger AT15 + Heart Locket DF15 - New Home's pacifist gear, the Determination set ("best i-frame set": locket + dagger is the strongest true-pacifist loadout) */
       items: [11, 16, 43, 61, 42, 21, 41, 17],/* Pie kept all game, Snowman Piece, Legendary Hero, Face Steak, Starfait, Cinnamon Bun, Sea Tea, Nice Cream - no Instant Noodles (they only heal 4 outside serious mode) */
       phone: [220, 221],                     /* Dimensional Box A + B */
       time: 6600, sub: "THE TRUE PACIFIST FINALE" },
     { id: "sans",     name: "SANS",                 area: "THE LAST CORRIDOR",
       route: "GENOCIDE", lv: 19, xp: 50000, kills: 109, gold: 120,  /* FTM's Sans preset values */
-      room: 231, plot: 199,   /* v2.0: room_lastruins_corridor + plot 199 -
+      room: 231, plot: 199,   /* v2.3: room_lastruins_corridor + plot 199 -
                               the same spawn Flowey's Time Machine uses.
-                              Walk right: the corridor loads, the trigger
-                              fires, Megalovania starts - exactly like the
-                              real route (the old room 232 spawn landed
-                              inside the trigger's mask). */
+                              v2.3 game data restores the full corridor
+                              cutscene (obj_lastsans_trigger starts at
+                              con=0 again and the battlegroup launch is
+                              back inside its writer guard): walk right,
+                              the corridor loads, the judgment speech plays
+                              - including the extra death-count lines - then
+                              Megalovania, exactly like the real route. The
+                              old room 232 spawn landed inside the trigger's
+                              mask. */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND, GEN_ENDGAME, GEN_STORYDONE]),
       weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
       items: [11, 16, 36, 43, 61, 41, 41, 37],/* Pie kept, 1x Snowman Piece, the one Instant Noodles (90 HP in serious mode), Legendary Hero, Face Steak, 2x Sea Tea, Crab Apple */
@@ -2771,7 +2784,7 @@ var UTFONT = {
     t[3 * 64 + 4] = "SET: COMFORT FOOD - ITEMS HEAL +5";        /* Stick + Bandage */
     t[13 * 64 + 12] = "SET: TOY KNIFE + RIBBON - ATK +2 DF +1"; /* Toy Knife + Faded Ribbon */
     t[14 * 64 + 15] = "SET: GLOVE + BANDANNA - ATK +3 DF +1";    /* Tough Glove + Manly Bandanna */
-    t[25 * 64 + 24] = "SET: SHOES + TUTU - I-FRAMES +60%";      /* Ballet Shoes + Old Tutu */
+    t[25 * 64 + 24] = "SET: SHOES + TUTU - INV +30 (CUSTOM)"; /* Ballet Shoes + Old Tutu - custom set, matches the in-game equip message and scr_damagestandard */
     t[45 * 64 + 44] = "SET: NOTEBOOK + GLASSES - ATK +2 DF +2"; /* Torn Notebook + Cloudy Glasses */
     t[47 * 64 + 46] = "SET: HOME COOKING - ITEMS HEAL +10";     /* Burnt Pan + Stained Apron */
     t[49 * 64 + 48] = "SET: GUN + HAT - ATK +3 DF +2";          /* Empty Gun + Cowboy Hat */
@@ -2792,7 +2805,7 @@ var UTFONT = {
       var x2 = 36 + textW(name, 2) + 20;
       text("LV " + info.lv, x2, 14, 2, COL.white);
       text("HP " + info.hp + "/" + info.maxhp, x2 + textW("LV " + info.lv, 2) + 20, 14, 2, COL.white);
-      var badge = info.route;
+      var badge = info.route === "PACIFIST" ? "PACI" : info.route;
       text(badge, W - 36 - textW(badge, 2), 14, 2, routeColor(info.route));
       var loc = (info.boss ? info.boss + " - " : "") + info.area;
       text(loc, 36, 48, 1, COL.hint);
