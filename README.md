@@ -24,6 +24,50 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.5 — the Sans fight intro restored, boss states at the right rooms, and
+the reload crash killed for real.**
+
+1. **The reload crash is fixed (the real one).** After a first visit, a
+   normal reload could leave the engine dead on a black "LOADING ENGINE"
+   screen — only a hard reload brought it back. Root cause: the page loaded
+   `index.js` and `runner.js` as two independent dynamic scripts. Dynamic
+   scripts execute in whatever order they arrive, and on a reload the
+   service worker serves `runner.js` from its cache *instantly* while
+   `index.js` is revalidated over the *network* (network-first by design,
+   so updates apply). The runner then booted before `index.js` had executed
+   and called `manifestFiles()` — a function only `index.js` defines —
+   which threw `ReferenceError: manifestFiles is not defined` and killed
+   the boot silently (reproduced live on this site's v2.4). v2.5 chains
+   the two scripts: `runner.js` is not even appended until `index.js` has
+   finished loading, restoring the template's original order no matter
+   which one the network delivers first. The 45 s boot watchdog stays as
+   the safety net.
+2. **The Sans fight intro plays properly again.** v2.1's "instant battler"
+   hack had silently swapped two comparisons inside `obj_sansb`'s Step
+   event, so the battle always started in its dead debug branch: the menu
+   was live while Sans' intro talk was still playing (you could attack him
+   mid-speech) and his intro text double-printed into the battle box. The
+   two operands are restored to the original values with a 3-byte in-place
+   patch — the event now decompiles byte-identical to the clean baseline,
+   so the fight opens with the birds-are-singing intro, the dialogue, and
+   then Megalovania, exactly like the real route.
+3. **The SANS boss state spawns in the Judgment Hall.** It used to save
+   into room 231 — `room_lastruins_corridor`, the gray New Home story
+   corridor *one room before* the hall. It now saves into room 232
+   (`room_sanscorridor`), on the savepoint at the left of the hall; walk
+   right and `obj_lastsans_trigger` runs the full "it's a beautiful day
+   outside" cutscene (death-count lines included) straight into the fight.
+4. **The ASRIEL boss state starts at the barrier — the way the fight is
+   actually reached.** It used to drop you directly into the
+   transformation room (`room_asrielappears`), skipping the entire
+   finale. It now saves into room 238 (`room_castle_barrier`) with the
+   authentic end-of-true-lab plot value (999) and flags (493 = 12, 510,
+   7). Arriving there plays the whole vanilla chain: Asgore's speech,
+   Toriel's interruption and the friends scene (the pacifist-only branch
+   `obj_asgore_finalintro` gates on flag 493), Flowey absorbing everyone,
+   the transformation — and then the real Asriel fight with Hopes and
+   Dreams playing.
+
 **v2.4 — the deep repair: rebuilt from the clean baseline, Asriel truly
 fightable, bullet cleanup restored, heals wiki-exact, boot self-healing.**
 

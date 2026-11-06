@@ -193,7 +193,7 @@ window.__ring = [];
       <button id="utRetry" type="button" hidden>RETRY</button>
       <div class="ut-bottom">
         <span>port by Kantasu</span>
-        <span>v2.1</span>
+        <span>v2.5</span>
         <a id="utOfflineLink" href="https://github.com/ddown325/Undertale-HTML/releases/latest/download/UNDERTALE-offline.html" target="_blank" rel="noopener">offline version</a>
       </div>
     </div>
@@ -653,7 +653,7 @@ window.__ring = [];
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v2.4';
+      var CACHE_VERSION = 'v2.5';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no
@@ -907,14 +907,27 @@ window.__ring = [];
           clearInterval(wdClear);
         }, 1000);
 
+        /* v2.5: STRICT ORDER - index.js MUST finish loading before runner.js is
+           even appended. Both scripts are dynamic (async by default), so they
+           used to execute in whatever order they arrived. On a reload the
+           service worker serves runner.js cache-first (instant) while index.js
+           is network-first (100-500ms on a real host), so runner.js executed
+           FIRST and blew up with "manifestFiles is not defined" (the function
+           lives in index.js; the runner calls it during its boot, right after
+           the savedata mount). The engine then died silently - the exact
+           "after a first load the engine fails to load, hard reload fixes it"
+           bug. Chaining the appends restores the template's original order
+           no matter which one the network delivers first. */
         var s1 = document.createElement('script');
         s1.src = 'index.js';
         s1.onerror = function () { fail('COULD NOT LOAD INDEX.JS'); };
+        s1.onload = function () {
+          var s2 = document.createElement('script');
+          s2.src = 'runner.js';
+          s2.onerror = function () { fail('COULD NOT LOAD RUNNER.JS'); };
+          document.body.appendChild(s2);
+        };
         document.body.appendChild(s1);
-        var s2 = document.createElement('script');
-        s2.src = 'runner.js';
-        s2.onerror = function () { fail('COULD NOT LOAD RUNNER.JS'); };
-        document.body.appendChild(s2);
       }
 
       /* ---------------- service worker (oggs + offline shell) ---------------- */

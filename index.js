@@ -2213,43 +2213,58 @@ function notify_config_change() {
       time: 4200, sub: "NEW HOME - THE BARRIER" },
     { id: "asriel",   name: "ASRIEL DREEMURR",      area: "THE TRUE FINALE",
       route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 300,  /* a real true-pacifist run: LV1 all game */
-      room: 331, plot: 235,                      /* room_asrielappears - v2.4: the
-                                                 transformation cutscene room.
-                                                 The cutscene (obj_asrielappear)
-                                                 is fully self-contained - it
-                                                 auto-plays on room entry and
-                                                 ends by launching battlegroup
-                                                 255 (obj_asrielb + Hopes and
-                                                 Dreams) in room_battle, i.e.
-                                                 the REAL Asriel fight. The old
-                                                 room 334 (room_asrieltest) was
-                                                 a leftover dev test room that
-                                                 just floats a static Asriel
-                                                 with no battle controller -
-                                                 "Asriel is not fightable".
-                                                 scr_dogcheck whitelists 331
-                                                 for the save-load. plot is
-                                                 inert here - nothing gates on
-                                                 235. */
-      flags: { 493: 12 },                        /* true lab complete - the friendship
-                                                 chain a real pacifist save carries */
+      room: 238, plot: 999,                      /* v2.5: room_castle_barrier - THE BARRIER,
+                                                 exactly where the real true-pacifist
+                                                 finale plays out. obj_barrierevent runs
+                                                 Asgore's speech, then launches battlegroup
+                                                 100; obj_asgore_finalintro sees
+                                                 flag[493] >= 12 and flips to special_end,
+                                                 which hands off to obj_friendscene - the
+                                                 self-contained Toriel-interruption /
+                                                 friends / Flowey-absorbs-the-souls
+                                                 cutscene - and that ends with
+                                                 room_goto(room_asrielappears) ->
+                                                 obj_asrielappear -> battlegroup 255 =
+                                                 the REAL Asriel fight (obj_asrielb +
+                                                 Hopes and Dreams). plot 999 is what the
+                                                 true-lab ending itself sets (see
+                                                 obj_asriel_overworldanim: flag[510]=1,
+                                                 plot=999, flag[7]=true right before
+                                                 room_goto(room_castle_prebarrier)).
+                                                 The old room 331 spawn dropped you
+                                                 straight into the transformation room
+                                                 and skipped the whole barrier sequence
+                                                 the fight is supposed to grow out of. */
+      flags: { 493: 12, 510: 1, 7: 1 },          /* 493=12: the full friendship chain
+                                                 (dated Papyrus, befriended Undyne,
+                                                 dated Alphys, true lab) - the exact
+                                                 value obj_asgore_finalintro gates the
+                                                 pacifist finale on. 510=1 + 7: set by
+                                                 the true-lab ending alongside plot 999. */
       weapon: 51, armor: 50, wstrength: 15, adef: 15,   /* Worn Dagger AT15 + Heart Locket DF15 - New Home's pacifist gear, the Determination set ("best i-frame set": locket + dagger is the strongest true-pacifist loadout) */
       items: [11, 16, 43, 61, 42, 21, 41, 17],/* Pie kept all game, Snowman Piece, Legendary Hero, Face Steak, Starfait, Cinnamon Bun, Sea Tea, Nice Cream - no Instant Noodles (they only heal 4 outside serious mode) */
       phone: [220, 221],                     /* Dimensional Box A + B */
       time: 6600, sub: "THE TRUE PACIFIST FINALE" },
     { id: "sans",     name: "SANS",                 area: "THE LAST CORRIDOR",
       route: "GENOCIDE", lv: 19, xp: 50000, kills: 109, gold: 120,  /* FTM's Sans preset values */
-      room: 231, plot: 199,   /* v2.3: room_lastruins_corridor + plot 199 -
-                              the same spawn Flowey's Time Machine uses.
-                              v2.3 game data restores the full corridor
-                              cutscene (obj_lastsans_trigger starts at
-                              con=0 again and the battlegroup launch is
-                              back inside its writer guard): walk right,
-                              the corridor loads, the judgment speech plays
-                              - including the extra death-count lines - then
-                              Megalovania, exactly like the real route. The
-                              old room 232 spawn landed inside the trigger's
-                              mask. */
+      room: 232, plot: 199,   /* v2.5: room_sanscorridor - THE JUDGMENT HALL,
+                              the room the Sans fight actually happens in.
+                              You spawn on its savepoint (the room's built-in
+                              obj_mainchara at x=110); walking right meets
+                              obj_lastsans_trigger (x=820), which needs
+                              plot <= 200 to exist and murderlv >= 16 to run
+                              its genocide branch (con 100): the "beautiful
+                              day outside" speech - with the extra death-count
+                              lines from undertale.ini - then Megalovania via
+                              battlegroup 95. The v2.3/v2.4 room 231
+                              (room_lastruins_corridor) is one room TOO EARLY:
+                              it is the gray New Home story corridor BEFORE
+                              the hall - "you are still in the room before
+                              sans fight". The old "spawned inside the
+                              trigger mask" note described the v2.1-era
+                              modified trigger; the trigger is original
+                              again, and its mask sits far right of the
+                              spawn point. */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER, GEN_AFTER_UT, GEN_AFTER_NEO, GEN_HOTLAND, GEN_ENDGAME, GEN_STORYDONE]),
       weapon: 52, armor: 53, wstrength: 99, adef: 99,   /* Real Knife + The Locket */
       items: [11, 16, 36, 43, 61, 41, 41, 37],/* Pie kept, 1x Snowman Piece, the one Instant Noodles (90 HP in serious mode), Legendary Hero, Face Steak, 2x Sea Tea, Crab Apple */
