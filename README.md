@@ -24,6 +24,52 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.4 — the deep repair: rebuilt from the clean baseline, Asriel truly
+fightable, bullet cleanup restored, heals wiki-exact, boot self-healing.**
+
+0. **The game data was rebuilt from the October baseline.** The files
+   re-uploaded on Nov 5 had silently lost the code of **302 code entries**
+   (cutscene drivers like `obj_asrielappear_Alarm_4`, bullet border
+   collisions, room scripts) and carried 36 more entries with corrupted
+   local-variable tables — the v2.3 pass was built on top of that damage
+   without noticing. v2.4 rebuilds from the intact October data and
+   re-applies every intended feature on top, so all 302 entries carry their
+   original code again. Verified: 0 duplicate code entries (v2.3 had 13),
+   0 decompile failures (v2.3 had 245), all object-event bindings at their
+   original positions.
+1. **ASRIEL is actually fightable now.** The v2.3 state dropped you into
+   `room_asrieltest` (room 334) — a leftover *dev test room* that just
+   floats a static Asriel with no battle controller (and could crash the
+   boot outright). The state now saves into `room_asrielappears` (room 331,
+   whitelisted in `scr_dogcheck`), where the vanilla self-contained
+   transformation cutscene auto-plays and ends by launching battlegroup
+   255 — the real Asriel fight (`obj_asrielb`, Hopes and Dreams) in
+   `room_battle`. The cutscene itself was dead before (its `Alarm_4`
+   driver was one of the 302 emptied entries) and runs again.
+2. **The "crashes when equipping the ballet set" class is gone.** The
+   parent bullet object's border-collision handlers (`blt_parent`
+   Collision rborder/dborder, plus loopbulletgrow/soapbul) were among the
+   emptied entries — bullets never destroyed themselves at the room edges,
+   so bullet-heavy fights (Undyne — exactly where the ballet set is your
+   gear) accumulated instances until the runner died. Border cleanup is
+   restored; the Ballet Shoes + Old Tutu INV+30 set bonus is unchanged.
+3. **Heals are wiki-exact.** The item-use table already matched the wiki
+   (verified per item), but v1.1's custom set bonuses made equipped sets
+   heal *extra* (Pan+Apron +10, Stick+Bandage +5) on top of the item
+   value. Those two hidden bonuses are removed — food now heals exactly
+   what the wiki says (the vanilla Burnt Pan +4 is authentic and stays).
+4. **"After a save state the game won't load without a hard reload" is
+   fixed at both ends.** The ASRIEL state's dev-room crash is gone (the
+   main trigger), and the loader is now self-healing: parts are read only
+   from the *current version's* cache (a stale same-sized part from an old
+   deploy's cache can no longer be stitched into the boot), old caches are
+   purged at page parse before anything is fetched, and a 45-second boot
+   watchdog purges the caches and reloads once — the hands-free equivalent
+   of the hard reload players had to do by hand.
+5. **The Last Corridor flow keeps the v2.3 restore** (trigger starts at
+   `con=0`, the battlegroup launch is writer-guarded, the death-count
+   speech plays, then Megalovania) — now on the clean baseline.
+
 **v2.3 — the nine-fix pass: Asriel state fixed, corridor cutscene restored,
 set bonus finished, texts polished.**
 

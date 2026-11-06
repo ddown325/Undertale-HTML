@@ -2213,13 +2213,24 @@ function notify_config_change() {
       time: 4200, sub: "NEW HOME - THE BARRIER" },
     { id: "asriel",   name: "ASRIEL DREEMURR",      area: "THE TRUE FINALE",
       route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 300,  /* a real true-pacifist run: LV1 all game */
-      room: 334, plot: 235,                      /* room_asrieltest - the Asriel fight room.
-                                                 v2.3: scr_dogcheck now whitelists
-                                                 room_asrieltest, so this room is a
-                                                 legal save target (it used to fail
-                                                 the dogcheck range check and dump
-                                                 you in room_of_dog). plot is inert
-                                                 here - nothing gates on 235. */
+      room: 331, plot: 235,                      /* room_asrielappears - v2.4: the
+                                                 transformation cutscene room.
+                                                 The cutscene (obj_asrielappear)
+                                                 is fully self-contained - it
+                                                 auto-plays on room entry and
+                                                 ends by launching battlegroup
+                                                 255 (obj_asrielb + Hopes and
+                                                 Dreams) in room_battle, i.e.
+                                                 the REAL Asriel fight. The old
+                                                 room 334 (room_asrieltest) was
+                                                 a leftover dev test room that
+                                                 just floats a static Asriel
+                                                 with no battle controller -
+                                                 "Asriel is not fightable".
+                                                 scr_dogcheck whitelists 331
+                                                 for the save-load. plot is
+                                                 inert here - nothing gates on
+                                                 235. */
       flags: { 493: 12 },                        /* true lab complete - the friendship
                                                  chain a real pacifist save carries */
       weapon: 51, armor: 50, wstrength: 15, adef: 15,   /* Worn Dagger AT15 + Heart Locket DF15 - New Home's pacifist gear, the Determination set ("best i-frame set": locket + dagger is the strongest true-pacifist loadout) */

@@ -653,7 +653,7 @@ window.__ring = [];
        *  file (game.unx parts, runner.*, lang/*) so every visitor
        *  re-downloads instead of using their stale offline copy.
        * ========================================================== */
-      var CACHE_VERSION = 'v2.3';
+      var CACHE_VERSION = 'v2.4';
       var CACHE_NAME = 'undertale-html-' + CACHE_VERSION;
 
       /* exact byte sizes - used for progress when a response has no
@@ -663,7 +663,7 @@ window.__ring = [];
         'game.unx.part2': 19993648,
         'game.unx.part3': 19993648,
         'game.unx.part4': 19993648,
-        'game.unx.part5': 19996084,
+        'game.unx.part5': 19997108,
         'runner.wasm': 5645898,
         'runner.data': 12561615,
         'audio-worklet.js': 491
@@ -754,9 +754,16 @@ window.__ring = [];
         attempt = attempt || 0;
         var url = new URL(name, document.baseURI).href;
 
-        /* 1. page-level Cache API read (works even before the SW controls us) */
+        /* 1. page-level Cache API read (works even before the SW controls us).
+           v2.4: read ONLY from THIS version's cache. A bare caches.match()
+           searches every cache on the origin and can hand back a part from
+           an old deploy's cache (same byte size, different content) - the
+           runner then boots a frankenstein data file and dies with no error
+           the page can catch. Old caches are purged at parse time below, so
+           scoping the read here makes a wrong-version serve impossible. */
         try {
-          var hit = await caches.match(url);
+          var verCache = await caches.open(CACHE_NAME);
+          var hit = await verCache.match(url);
           if (hit) {
             var cl = +(hit.headers.get('Content-Length') || 0);
             var expected = SIZES[name] || 0;
@@ -892,6 +899,14 @@ window.__ring = [];
         updateUI('STARTING GAME');
         el.pct.textContent = '100%';
 
+        armBootWatchdog();
+        /* the watchdog ticket is only valid until the game actually runs */
+        var wdClear = setInterval(function () {
+          if (!window.UT_BOOTED) return;
+          try { sessionStorage.removeItem('utBootWatchdog'); } catch (e) {}
+          clearInterval(wdClear);
+        }, 1000);
+
         var s1 = document.createElement('script');
         s1.src = 'index.js';
         s1.onerror = function () { fail('COULD NOT LOAD INDEX.JS'); };
@@ -912,6 +927,70 @@ window.__ring = [];
         }).catch(function (e) {
           console.warn('[loader] service worker unavailable:', e);
         });
+      }
+
+      /* ---------------- v2.4 boot hardening ---------------- */
+      /* (a) purge foreign/old caches NOW, at page parse - BEFORE any part is
+         fetched. Previously this happened only after the boot finished, so a
+         stale cache from an older deploy could serve wrong-but-same-sized
+         parts during the very boot that was supposed to clean it up. */
+      (function purgeForeignCaches() {
+        if (!window.caches || !caches.keys) return;
+        caches.keys().then(function (names) {
+          names.forEach(function (nm) {
+            if (nm !== CACHE_NAME) {
+              console.warn('[loader] purging stale cache:', nm);
+              caches.delete(nm).catch(function () {});
+            }
+          });
+        }).catch(function () {});
+      })();
+
+      /* (b) boot watchdog: if the runner has not entered its main loop within
+         45 s of the boot scripts starting, something died silently (the
+         runner aborts on some wasm-level faults without ever throwing a JS
+         error the page can see). Recover once per session: purge every cache,
+         unregister the service worker and reload - equivalent to the "hard
+         reload" players had to do by hand. */
+      function armBootWatchdog() {
+        var armed = false;
+        try { armed = sessionStorage.getItem('utBootWatchdog') === '1'; } catch (e) {}
+        if (armed) {
+          console.warn('[loader] boot watchdog already fired this session - showing the retry button');
+          setTimeout(function () { fail('THE GAME DID NOT START'); }, 45000);
+          return;
+        }
+        setTimeout(function () {
+          if (window.UT_BOOTED) return;
+          try { sessionStorage.setItem('utBootWatchdog', '1'); } catch (e) {}
+          console.warn('[loader] boot watchdog fired - purging caches and reloading once');
+          var go = function () { window.location.replace(window.location.pathname + '?utwatch=1' + window.location.hash); };
+          var left = 0;
+          function done() { if (--left <= 0) go(); }
+          if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+            left++;
+            navigator.serviceWorker.getRegistrations().then(function (regs) {
+              var q = regs.length;
+              if (!q) return done();
+              regs.forEach(function (rg) {
+                rg.unregister().then(function () { if (--q <= 0) done(); },
+                                      function () { if (--q <= 0) done(); });
+              });
+            }).catch(done);
+          }
+          if (window.caches && caches.keys) {
+            left++;
+            caches.keys().then(function (names) {
+              var q = names.length;
+              if (!q) return done();
+              names.forEach(function (nm) {
+                caches.delete(nm).then(function () { if (--q <= 0) done(); },
+                                       function () { if (--q <= 0) done(); });
+              });
+            }).catch(done);
+          }
+          setTimeout(go, 4000);   /* never hang on a stuck promise */
+        }, 45000);
       }
 
       /* ---------------- main ---------------- */
