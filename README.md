@@ -24,6 +24,38 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.7 — Sans's death taunts 12-17 rewritten: the jokes die and the hate
+becomes real, ending on the dirty brother killer.**
+
+1. **The arc.** Toby's taunts 2-11 each riff on the number; the old custom
+   12-17 didn't escalate — "most fun i've had in a while" and "good times"
+   read almost cheerful. The rewrite keeps the ritual ("hmm. that
+   expression... that's the expression of someone who's died N times in a
+   row.") while it curdles: 12 pays off 11's "count for me... we'll start
+   from 12" with the dozen → baker's-dozen chain that 13 collects; 14's
+   "i think i'm the last one doing this." / "tough crowd." aims the joke at
+   the empty underground; 15's "i keep waiting for you to get tired of
+   this. but you never do, do you." drops the mask; 16 is Papyrus in past
+   tense ("knew a guy who never got tired of anything. big guy, loud.")
+   cut off with "...anyway."; and 17 breaks the format entirely — no
+   opener, just a flat "seventeen." and "i'm done counting."
+2. **The finale.** After 17's speech a second, silent text block plays
+   (typer 21 — no typewriter sound, same as the neutral-route judgment)
+   with the black-sockets face: "...all right. here it is." → "Then why'd
+   you kill my brother?" → "You dirty brother killer." — the last two
+   byte-identical to the game's own judgment lines, capitals and all. A new
+   `con 114` stage in `obj_lastsans_trigger` chains it to the fight start,
+   mirroring vanilla's own back-to-back-dialoguer pattern (`con 20/21`).
+3. **Faces rebuilt.** The portraits now carry the escalation: E1/E2 smug
+   early, the first weary E3 crack at 13, E4 (empty black sockets)
+   dominating from 15 on. The 18+ pool ("still waiting on that answer, by
+   the way." / "one of these times it's gonna stick." / "...nothin'
+   personal, pal." / "...he believed in you, y'know.") is E3/E4 only, and
+   even vanilla's "right on time." is re-faced from grin to black sockets
+   so the mood never bounces back to cheerful. Deaths 2-11 and the ≥18
+   branch logic are otherwise untouched (byte-diffed); the lang/*.json
+   reference mirrors were regenerated to match.
+
 **v2.6 — the true-pacifist finale fixed for real: the Asriel fight
 triggers, and Go Back no longer skips it.**
 
