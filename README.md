@@ -24,6 +24,56 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.6 — the true-pacifist finale fixed for real: the Asriel fight
+triggers, and Go Back no longer skips it.**
+
+1. **The ASRIEL state carried post-fight values — the fight-skip bug.**
+   v2.5 spawned you at the barrier with `plot 999`, `flag 510 = 1` and
+   `flag 7` — three values the game only sets in `obj_asriel_overworldanim`,
+   the goodbye scene *after* the Asriel fight is over (they are
+   post-finale markers, not prerequisites). The smoking gun: `flag 510`
+   is exactly what arms `obj_friendc_event` in the prebarrier corridor —
+   so the moment you picked **Go Back** at Asgore's Continue/Go Back
+   choice (or walked left through the door), room 237 loaded, the
+   post-Asriel "Frisk! This is all just a bad dream…!" ending walk fired,
+   `flag 510` flipped to 2, and the finale was marked complete — the
+   Asriel fight permanently skipped for that file. v2.6 gives the state
+   the values a real true-pacifist player has standing at the barrier:
+   `plot 208` (set by `obj_asgore_prebarrier_event` as Asgore walks in)
+   and **only** `flag 493 = 12` (the friendship chain
+   `obj_asgore_finalintro` gates the pacifist interrupt on). With 510/7
+   unset, Go Back is the vanilla postpone — re-enter and Asgore asks
+   "Back so soon? Ready / Go Back" — and Continue plays the whole chain:
+   Asgore's speech, battlegroup 100, Toriel's interruption, the friends
+   scene, Flowey absorbing the souls, the transformation, and battlegroup
+   255 — the real Asriel fight. Verified end-to-end in a headless
+   browser through the actual save-load path (title → Continue →
+   barrier → … → fighting Asriel's SAVE-your-friends phase), plus
+   independent code audit of every gate in the chain.
+2. **The "heals are wrong" report was the set-bonus text, and it now
+   renders.** The three `item_use_setbonus_*` strings carried `\[1\]`
+   tokens — 5 characters — while `scr_gettext`'s substitution matcher
+   expects the 4-character `\[1]` form (it checks the character at
+   i+3 for `]`), so the numbers never substituted and the equip message
+   showed literal `\[1\]`. The strings are fixed in place; equipping a
+   set now reads e.g. "Set bonus! INV +30" with the real numbers.
+   (The heal *values* themselves were already wiki-exact — `scr_itemuseb`
+   is byte-identical to the clean baseline.)
+3. **A fresh-boot DF typo is corrected.** `SCR_GAMESTART` initialized
+   `global.setdf = 1` instead of 0 (a one-byte typo from the set-bonus
+   feature pass), giving a phantom +1 DF on new games until the first
+   save load recomputed it. Now 0, matching `scr_load`.
+4. **UNDYNE THE UNDYING spawns on the bridge.** Same class of bug as the
+   old Sans spawn: the state saved into room 132 (`room_water19`, the
+   savepoint room) while its trigger — `obj_monsterkidtrigger7` — lives
+   one room later in room 133 (`room_water20`). It now spawns at the
+   room's own spawn point; walk right into the Monster Kid cutscene and
+   the fight.
+5. **Boss-state labels at the barrier.** The ESC menu now tells ASGORE
+   and ASRIEL saves apart at room 238 the same way the game does — by
+   the friendship flag 493, not by the kills-derived route (the
+   zero-kill ASGORE state was mislabeled for a moment there).
+
 **v2.5 — the Sans fight intro restored, boss states at the right rooms, and
 the reload crash killed for real.**
 
@@ -60,13 +110,14 @@ the reload crash killed for real.**
 4. **The ASRIEL boss state starts at the barrier — the way the fight is
    actually reached.** It used to drop you directly into the
    transformation room (`room_asrielappears`), skipping the entire
-   finale. It now saves into room 238 (`room_castle_barrier`) with the
+   finale. It now saves into room 238 (`room_castle_barrier`) ~~with the
    authentic end-of-true-lab plot value (999) and flags (493 = 12, 510,
-   7). Arriving there plays the whole vanilla chain: Asgore's speech,
-   Toriel's interruption and the friends scene (the pacifist-only branch
-   `obj_asgore_finalintro` gates on flag 493), Flowey absorbing everyone,
-   the transformation — and then the real Asriel fight with Hopes and
-   Dreams playing.
+   7)~~ *(v2.6 corrected those three values — see above — to the actual
+   pre-fight plot 208 and flag 493 alone.)* Arriving there plays the
+   whole vanilla chain: Asgore's speech, Toriel's interruption and the
+   friends scene (the pacifist-only branch `obj_asgore_finalintro` gates
+   on flag 493), Flowey absorbing everyone, the transformation — and
+   then the real Asriel fight with Hopes and Dreams playing.
 
 **v2.4 — the deep repair: rebuilt from the clean baseline, Asriel truly
 fightable, bullet cleanup restored, heals wiki-exact, boot self-healing.**

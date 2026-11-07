@@ -2010,7 +2010,15 @@ function notify_config_change() {
               rn === "room_fire_core_premett")) return "METTATON NEO";
     if (!g && (rn === "room_fire_core_metttest" || rn === "room_fire_core_final" ||
                rn === "room_fire_core_premett")) return "METTATON EX";
-    if (rn === "room_asgoreroom" || rn === "room_castle_prebarrier" || rn === "room_castle_barrier") return "ASGORE";
+    /* v2.6: the barrier room hosts two finales - the neutral ASGORE fight and
+       the true-pacifist ASRIEL chain. Both boss states spawn in
+       room_castle_barrier (238); the friendship chain flag 493 is what
+       separates them (the game's own obj_asgore_finalintro gates the
+       pacifist finale on flag[493] >= 12), so label on THAT, not on the
+       kills-derived route - the zero-kill ASGORE state must not be
+       mislabeled ASRIEL. */
+    if (rn === "room_castle_barrier") return (info.flags && info.flags[493] >= 12) ? "ASRIEL" : "ASGORE";
+    if (rn === "room_asgoreroom" || rn === "room_castle_prebarrier") return "ASGORE";
     if (rn === "room_floweyx" || rn === "room_floweybattle") return "FLOWEY";
     if (rn === "room_asrielroom_final") return "ASRIEL";
     if (rn === "room_fogroom") return "PAPYRUS";
@@ -2177,7 +2185,19 @@ function notify_config_change() {
       time: 2400, sub: "WATERFALL - THE YARD" },
     { id: "undyneut", name: "UNDYNE THE UNDYING",   area: "WATERFALL",
       route: "GENOCIDE", lv: 11, xp: 1700,  kills: 56,  gold: 60,
-      room: 132, plot: 114,                       /* room_water19 - the bridge  */
+      room: 133, plot: 114,   /* v2.6: room_water20 - THE BRIDGE itself.
+                              v2.3-v2.5 spawned in room 132 (room_water19,
+                              the savepoint room) one room EARLY - the same
+                              class of bug as the old Sans spawn ("still in
+                              the room before the fight"). The actual fight
+                              trigger, obj_monsterkidtrigger7 (x=400), lives
+                              HERE in room_water20: Create keeps it alive at
+                              plot <= 119 (114 arms it), scr_murderlv() >= 11
+                              && flag[27] == 0 runs the genocide branch
+                              (con 100): Monster Kid intervention ->
+                              battlegroup 91 = Undyne the Undying. Spawn is
+                              the room's own obj_mainchara (140,100); walk
+                              right ~260px to the trigger. */
       flags: genFlags([GEN_RUINS, GEN_SNOWDIN, GEN_WATER]),
       weapon: 25, armor: 24, wstrength: 7,  adef: 10,
       items: [11, 16, 41, 41, 37, 1, 1, 7],   /* Pie kept, 1x Snowman Piece, 2x Sea Tea (Gerson stays in genocide), Crab Apple, 2x Monster Candy (bowl cap 3 in hellish world), Spider Donut */
@@ -2213,11 +2233,19 @@ function notify_config_change() {
       time: 4200, sub: "NEW HOME - THE BARRIER" },
     { id: "asriel",   name: "ASRIEL DREEMURR",      area: "THE TRUE FINALE",
       route: "PACIFIST", lv: 1,  xp: 0,     kills: 0,   gold: 300,  /* a real true-pacifist run: LV1 all game */
-      room: 238, plot: 999,                      /* v2.5: room_castle_barrier - THE BARRIER,
+      room: 238, plot: 208,                      /* v2.6: room_castle_barrier - THE BARRIER,
                                                  exactly where the real true-pacifist
-                                                 finale plays out. obj_barrierevent runs
-                                                 Asgore's speech, then launches battlegroup
-                                                 100; obj_asgore_finalintro sees
+                                                 finale plays out, carrying exactly the
+                                                 plot the real game has at that moment:
+                                                 obj_asgore_prebarrier_event sets plot
+                                                 207 -> 208 as Asgore walks into the
+                                                 barrier, so 208 is the value you enter
+                                                 room_castle_barrier with on the real
+                                                 route. obj_barrierevent never checks
+                                                 plot itself - it runs Asgore's speech,
+                                                 then the Continue / Go Back choice;
+                                                 Continue -> battlegroup 100 ->
+                                                 obj_asgore_finalintro sees
                                                  flag[493] >= 12 and flips to special_end,
                                                  which hands off to obj_friendscene - the
                                                  self-contained Toriel-interruption /
@@ -2226,21 +2254,37 @@ function notify_config_change() {
                                                  room_goto(room_asrielappears) ->
                                                  obj_asrielappear -> battlegroup 255 =
                                                  the REAL Asriel fight (obj_asrielb +
-                                                 Hopes and Dreams). plot 999 is what the
-                                                 true-lab ending itself sets (see
-                                                 obj_asriel_overworldanim: flag[510]=1,
-                                                 plot=999, flag[7]=true right before
-                                                 room_goto(room_castle_prebarrier)).
-                                                 The old room 331 spawn dropped you
-                                                 straight into the transformation room
-                                                 and skipped the whole barrier sequence
-                                                 the fight is supposed to grow out of. */
-      flags: { 493: 12, 510: 1, 7: 1 },          /* 493=12: the full friendship chain
+                                                 Hopes and Dreams). The whole chain was
+                                                 live-tested end to end in a headless
+                                                 browser with exactly these values.
+                                                 v2.5's plot 999 / flag 510 / flag 7 were
+                                                 WRONG: those three are set by
+                                                 obj_asriel_overworldanim AFTER the
+                                                 Asriel fight is over (the goodbye scene
+                                                 right before room_castle_prebarrier),
+                                                 i.e. they are post-finale markers.
+                                                 flag[510] == 1 is what makes
+                                                 obj_friendc_event in room 237 run the
+                                                 post-Asriel "Frisk! This is all just a
+                                                 bad dream...!" ending walk the moment
+                                                 you enter the prebarrier corridor - so
+                                                 picking Go Back at the barrier (or
+                                                 walking left through the door) started
+                                                 the ending and permanently skipped the
+                                                 fight ("if you choose go back it causes
+                                                 the fight to be skipped"). With 510/7
+                                                 unset the friendc event destroys
+                                                 itself (flag[510] == 0) and Go Back is
+                                                 the vanilla postpone: re-enter and
+                                                 Asgore asks "Back so soon? Ready / Go
+                                                 Back" until you are. */
+      flags: { 493: 12 },                         /* 493=12: the full friendship chain
                                                  (dated Papyrus, befriended Undyne,
                                                  dated Alphys, true lab) - the exact
                                                  value obj_asgore_finalintro gates the
-                                                 pacifist finale on. 510=1 + 7: set by
-                                                 the true-lab ending alongside plot 999. */
+                                                 pacifist finale on. v2.6: 510 and 7
+                                                 REMOVED - they are post-Asriel-fight
+                                                 values (see above), not prerequisites. */
       weapon: 51, armor: 50, wstrength: 15, adef: 15,   /* Worn Dagger AT15 + Heart Locket DF15 - New Home's pacifist gear, the Determination set ("best i-frame set": locket + dagger is the strongest true-pacifist loadout) */
       items: [11, 16, 43, 61, 42, 21, 41, 17],/* Pie kept all game, Snowman Piece, Legendary Hero, Face Steak, Starfait, Cinnamon Bun, Sea Tea, Nice Cream - no Instant Noodles (they only heal 4 outside serious mode) */
       phone: [220, 221],                     /* Dimensional Box A + B */
