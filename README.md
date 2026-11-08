@@ -24,6 +24,49 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.9 — the interrupt actually interrupts: Asgore gets cut off mid-word on
+every Sans death, the reload greetings multiply, and the taunts get one more
+pass.**
+
+1. **The game-over takeover works now (root cause fixed).** v2.8 checked
+   `instance_exists(obj_sansb)` inside `obj_heartdefeated` — but by the time
+   the death screen runs, the room has already changed and `obj_sansb` (not
+   persistent) is gone, so the check could never fire. v2.9 sets a
+   `global.sansdeath` flag at the exact moment of death in
+   `obj_battlecontroller` (the same spot vanilla tracks Asgore's KillYou
+   counter, while the Sans battle object still exists), and the death screen
+   reads and clears it there. It triggers on **your** death in the Sans fight
+   — never anywhere else — and the spare-trap dunked-on easter egg (msg 300 +
+   dogsong) still wins when you die to the mercy fake-out.
+2. **Asgore genuinely gets cut off now.** Each of the 15 interrupt variants is
+   three pages: Asgore starts one of his real encouragement lines on his own
+   voice (typer 30, `snd_txtasg`) and is severed **mid-word** ("You cannot
+   give up just y—", "Stay determi—", "Hold o—"); the moment that page
+   closes, the screen swaps writers and Sans takes over on his voice (typer
+   110, `snd_txtsans`, identical layout) — the same writer-swap trick the
+   game itself uses for multi-speaker cutscenes. Variant N plays on your Nth
+   death to Sans and they cycle after 15: smug tutorial mockery (1-4) → the
+   jokes get tired (5-8) → the hatred shows (9-12) → cold and personal
+   (13-15, with 15 naming Papyrus).
+3. **Four more reload-after-killing-Sans greetings (six total, cycling).**
+   Vanilla had two ("...i won't grace it with a description." / "...you're
+   really kind of a freak, huh?"); v2.9 adds kills 3-6+: the rest that
+   didn't take ("quit waking me up."), the closed diner ("guess you already
+   ate."), the brother you can almost hear, and "part-time skeleton,
+   full-time deja vu... you keep unsolving this." Also fixed: the death
+   taunts' extra pages no longer bleed into the reload greeting (msg[4-6]
+   are cleared), and the death-17 finale no longer misfires after a
+   kill-reload.
+4. **Deaths 12-17, third pass.** Faces now arc with the joke (no face held
+   three pages straight: smirk/wink → flat → black sockets), 12's counting
+   praise tightened ("finally something i can count on."), 13's bad-luck
+   turn sharpened, 14 ends alone in the dark, 15's "feels longer" lands on a
+   smile-less laugh, 16 breathes the eulogy, and 17 asks quieter. And the
+   mandated fix: the finale now reads **"why'd you kill my brother?"** —
+   no "Then".
+   lang/*.json reference mirrors regenerated (17081 entries);
+   `CACHE_VERSION → v2.9`, `SIZES.part5 = 20013236`.
+
 **v2.8 — the taunts polished, the finale finds its voice, and Sans cuts
 Asgore off on every single death.**
 
