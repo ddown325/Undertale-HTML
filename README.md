@@ -24,6 +24,45 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.10 — the freeze is dead, the eye is lit, and the greetings learn to count.**
+
+1. **FIXED the v2.9 game-over freeze.** The interrupt was built right (trigger,
+   15 variants, voice swap) but it died on the finish line: v2.9 fed the writer
+   blank placeholder pages (`msg[1] = ""`), and Undertale's text engine never
+   sets its page-advance state on an empty page — so every Z press after
+   Asgore's cut-off line hit a no-op and the death screen locked up forever.
+   v2.10 does it the way the engine wants it: Asgore's page now ends with the
+   real end-of-message terminator (`/%%`), and the two Sans pages are handed to
+   a second writer as proper pages with a `%%` sentinel after the last one.
+   Z through Asgore's severed word → Sans talks (his own voice, typer 110) →
+   Z, Z → the death screen continues to the fade-out exactly like vanilla.
+   The interrupt still only fires when YOU die in the Sans fight (flag set in
+   `obj_battlecontroller` the instant your HP hits 0, cleared after use).
+2. **The 17th death faces you with the glowing eye.** `obj_face_sans` now
+   supports face code 5 and maps it to `spr_sansb_blueeye` (the flickering
+   left-eye sprite from the fight), scaled into the dialog face slot. The
+   finale is now: black sockets through "i'm done counting", the smile for
+   "...wanna hear it?", then the eye lights up for "why'd you kill my
+   brother?" / "You dirty brother killer." — verbatim, no "Then".
+3. **Kill-reload greetings: a realization arc instead of four random jokes.**
+   The four post-kill greetings now escalate: kill 3 he counts the pattern
+   ("that's the third time i've woken up in this hallway... you're already
+   standing here"), kill 4 he names the mechanism ("no coffin, no funeral,
+   nothing... you just keep hitting rewind"), kill 5 the realization lands
+   ("dying's quick for me, pal... but you keep coming back for seconds"),
+   and from kill 6 on he stops cycling and stays on the verdict: "everybody
+   down here's got one word for me. monster. but i never once came back for
+   seconds. you did, pal. you're more of a monster than i am." The old
+   `%4` cycle is clamped so the monster line is the permanent final state.
+4. **Taunts 12-17, fourth pass:** face arcs rebuilt (the wink lands on the
+   jackpot, the eulogy stays quiet, "wanna hear it?" now comes with the
+   smile), death 13's broken closer (a copy of 12's baker's-dozen threat)
+   replaced with "and you just keep proving it right", the leftover
+   "Then why'd you..." on the unused vanilla path also de-Then'd.
+5. **Packaging:** `CACHE_VERSION → v2.10`, `SIZES.part5 = 20016308`; lang
+   mirrors regenerated (50 entries changed); the six edited code entries
+   round-trip byte-identical through the compiler.
+
 **v2.9 — the interrupt actually interrupts: Asgore gets cut off mid-word on
 every Sans death, the reload greetings multiply, and the taunts get one more
 pass.**
