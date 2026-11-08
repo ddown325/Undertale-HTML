@@ -24,6 +24,58 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.11 — no Z needed for the cutoff, and 90 new ways for him to be a dick.**
+
+1. **The cut-off is now seamless.** v2.10 fixed the freeze but still made you
+   press Z after Asgore's severed word before Sans would start talking. v2.11
+   watches the writer's page state directly: the instant Asgore's line finishes
+   typing (the engine sets `halt` on hitting the `/` terminator), the death
+   screen destroys that writer and hands the box to Sans in the very next
+   frame — his pages start typing on his own voice with zero input. Asgore's
+   "You cannot give up just y—" becomes "...ou heard him. too bad he's not
+   the one you're fighting." without a single keypress. Sans's own pages still
+   advance on Z so you can read at your own pace, then the screen fades to
+   respawn exactly like vanilla.
+2. **90 new post-kill death taunts — 15 per kill state.** Dying to Sans after
+   you've killed him used to play the same reload greeting forever. Now a new
+   `Sans/SD` counter (deaths since his last kill, bumped on the death screen,
+   reset when he actually dies) drives a full taunt set per kill count: state 1
+   is smug ("you dusted me once, buddy. lightning doesn't strike twice"),
+   state 2 counts ("two for you... ran out of fingers. then toes, then
+   patience"), state 3 goes weary ("first time's a fluke. second's a
+   coincidence. third time, we've got a lifestyle"), state 4 phones it in
+   ("four deaths, no snacks. this hallway's a terrible restaurant. one
+   star. ...the waiter's dead"), state 5 curdles ("that mercy button's
+   basically decoration now... you are the match") and state 6+ stays on
+   quiet hatred ("You know what you are. I stopped needing the word for
+   it."). Each state has 15 variants (rotating by death, wrapping on the
+   16th), every variant its own 4-page scene with its own face arc — the
+   wink lands on the jokes, the sockets go black for the last line, and each
+   state's 15th variant is the quiet capitalized closer.
+3. **Deaths 12-16 re-polished in his actual voice:** death 12 pays the dozen
+   off with donuts ("'cept folks usually enjoy donuts") and the job joke
+   ("you've stuck with this longer than any job i've ever had"), death 13's
+   baker's dozen is "still warm" with the burned closer "...luck's got
+   nothing to do with it", death 14 rides the casino bit to "you're playing the
+   house, buddy... the house never loses", death 15 keeps the quarter-hour
+   ("feels longer... somewhere in there, i quit having fun") and death 16
+   keeps the Papyrus turn ("knew a guy who never got tired of anything.
+   big guy, loud... everybody liked him... welp.").
+4. **All 15 death-screen interrupts rewritten as true mid-word cut-offs:**
+   Sans now finishes the severed word and twists it — "Stay determi—"
+   "...ned. heh. that word's been working overtime for you.", "Hold o—"
+   "...n a sec. actually, don't. i'm on a roll.", "Stay d—" "...etermined
+   to lose? that's the only streak you got going." — and the arc still ends
+   on Papyrus: "It cannot end n—" "...ow, huh? papyrus thought it'd end
+   different, too."
+5. **Kill greetings 3-6 tightened:** kill 3 is the recurring dream ("i keep
+   having this dream. i'm standing in this hallway, and you dust me. third
+   time tonight"), kill 4 adds "not even a bad eulogy" to the rewind beat,
+   5 and 6 keep the realization and the verdict.
+6. **Packaging:** `CACHE_VERSION → v2.11`, part5 = 20066612 bytes; lang
+   mirror regenerated (423 new lines); the five edited code entries verified
+   on a clean reload (all needles, 17441 text keys = 17081 + 360).
+
 **v2.10 — the freeze is dead, the eye is lit, and the greetings learn to count.**
 
 1. **FIXED the v2.9 game-over freeze.** The interrupt was built right (trigger,
