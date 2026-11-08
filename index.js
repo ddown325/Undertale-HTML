@@ -947,11 +947,12 @@ function manifestFiles()
 
 function manifestFilesMD5()
 {
-  return [ "c796f9390f0ae1b05fdbf556311fb559",
+  return [
+"c796f9390f0ae1b05fdbf556311fb559",
 "1647d3ad4762cc3e78e490b208a878a2",
 "f71a3a6a351db50641cec0b037fb7aa3",
 "e8f1e8db8cf996f8715a6f2164c2e44e",
-"c6dcd2c97da6acd10b5ac75e94a13a99",
+"c542ddee301b01de49c854f6c6a1c179",
 "da78df4767592b0759de45f1a97f7c05",
 "bc7c594cda5c6c1b0276fb86a11e175b",
 "41833545251f09c1bec5c6dc9075c2d9",
@@ -1164,8 +1165,9 @@ function manifestFilesMD5()
 "3ea95393e37003490ed3707d3e9276f7",
 "fc49ca134bbec186ac6b849740d208a8",
 "68d404e8253721ac67ee2d530f837d91",
-"073da3cf52b8b9f48127f30f3f5dba1d",
-"bd26e573baff689c3f6bcfb6cf9793b5" ];
+"38e28f5623b6a8dbb06f09ce31b46924",
+"bd26e573baff689c3f6bcfb6cf9793b5"
+      ];
 }
 
 function onFirstFrameRendered()
