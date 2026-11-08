@@ -24,6 +24,44 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v2.8 — the taunts polished, the finale finds its voice, and Sans cuts
+Asgore off on every single death.**
+
+1. **Deaths 12-17, second pass.** Playtesting called the v2.7 arc "weird" in
+   places, so the middle deaths got re-cut: 12 now pays off "count for me"
+   as patronizing praise ("hey, look at you. counted that all by yourself.
+   ... guess i can count on you, huh." → dozen → "one more and it's a
+   baker's dozen."); 13 collects it as a "kept promise" before the E3 crack
+   ("...but bad luck keeps missing you. wonder where it all lands."); 14
+   calls back 7's lucky-seven jackpot and flips it ("too bad you're not
+   playing slots. you're playing the house... and the house never loses.");
+   15's number joke dies mid-sentence ("somewhere in there, i quit having
+   fun. but you keep loading back in... so i guess one of us still is.");
+   16 stays a past-tense eulogy but lands harder ("everybody liked him...
+   he liked everybody." → "welp."); 17 stays the flat ritual-break it was.
+   Deaths 2-11 remain byte-identical.
+2. **The death-17 finale now has a voice.** The closing block (typer 21 —
+   silent by design in vanilla, used by the neutral judgment) played with
+   no typewriter sound. New `typer 125` in `SCR_TEXTTYPE`: identical slow
+   pacing and font, but `snd_nosound` → `snd_txtsans`. The canon pair
+   "Then why'd you kill my brother?" / "You dirty brother killer." still
+   lands verbatim, black sockets and all — now you can hear it.
+3. **Sans takes over the GAME OVER screen.** In vanilla, dying to him only
+   got you the dunked-on easter egg (msg 300, spare-trap deaths). Now
+   `obj_heartdefeated` checks for a live `obj_sansb` on every death: Asgore
+   starts his "You cannot give up just yet..." and Sans cuts him off with
+   one of **15 unique lines** picked by death count (`400 + (F-1) mod 15`,
+   reading [Sans] F from undertale.ini, so they cycle after 15). The arc:
+   casual teasing about the opening barrage and blue bones (1-3) →
+   determination/save mockery (4-7) → karma and KR poison (8-9) → the
+   mercy-trap gloat (10) → "that's not determination you've got... that's
+   just stubbornness." (11) → the jokes stop (12-14) → "my brother
+   would've forgiven you... that's the worst part." (15). They use the
+   same game-over sans voice as the dunked-on line (typer 110); the
+   dunked-on easter egg itself still plays on spare-trap deaths.
+   lang/*.json reference mirrors regenerated (17050 entries);
+   `CACHE_VERSION → v2.8`, `SIZES.part5 = 20005556`.
+
 **v2.7 — Sans's death taunts 12-17 rewritten: the jokes die and the hate
 becomes real, ending on the dirty brother killer.**
 
