@@ -24,6 +24,45 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v3.1 — the eye finally sits in the socket, and seven lines get the canon pass.**
+
+1. **The glowing eye is fixed for real.** The game-over eye frames on
+   `spr_face_sansnoeyes` were a centered donut ring with a big dark hole —
+   it read as a symbol pasted over the face, not a glowing eye ("out of
+   place"). Both glow frames were redrawn to the canon `spr_sansb_blueeye`
+   formula: a socket-filling organic cyan/yellow blob with a small 2×1 pupil
+   notch, centered in the right socket with honest margins. The texture page
+   was re-encoded in place (same page, same sprite entry, byte-level patch —
+   every sprite/code/string pointer in the data file is untouched).
+2. **"Why'd you kill my brother?"** — the famous line dropped its "Then" (it
+   reads cleaner), in both places it lands: the F17 finale pair and the
+   corridor cut.
+3. **Seven lines re-cut after a full opus canon-voice review** of all 105
+   death-screen lines and the corridor speeches:
+   - `411`: the "practice makes bones" pun broke the jokes-stop arc →
+     "heh. you're getting faster, pal. / so am i, pal. see you soon."
+   - `524`: the wind tautology ("the wind… probably just the wind") →
+     "you hear that hum in here, pal? it never stops. / heh. probably just
+     the pipes."
+   - `536`/`556`: both implied Papyrus was alive on the genocide route
+     ("this morning, my brother was yelling" / "papyrus saved me a plate
+     last night") → impossible-memory versions ("keep thinking i hear my
+     brother yelling. / heh. he's been quiet a while now." / "my brother
+     left a plate in the fridge. i don't remember eating it. plate's
+     clean.")
+   - `548`: the broken station/dust joke → the restored "you know what's
+     great about dreams, pal? / you wake up. well, usually."
+   - `558`↔`559` swapped so tier 4 ends on the strong closer ("my gut says
+     don't.") instead of a cozy shrug; stray comma removed.
+   - `568`: "somebody once told me to watch out for you" → "asked me to
+     **look** out for you" (Toriel asked him to protect you, and the
+     look/look echo lands the punchline).
+   Review verdict: the SK1-5 memory rules hold (no line reveals he knows he
+   died), tier escalation is clean, and the corridor ladder still lands on
+   the "…that's what i said last time, isn't it?" payoff.
+4. `CACHE_VERSION → v3.1` (index.html + sw.js); lang mirrors regenerated;
+   md5 manifest updated.
+
 **v3.0 — run button, set-bonus pages, and a third pass on his voice.**
 
 1. **Hold X to run.** In the overworld, hold X (or Shift) to move at 1.45x
