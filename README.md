@@ -24,6 +24,70 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v3.0 — run button, set-bonus pages, and a third pass on his voice.**
+
+1. **Hold X to run.** In the overworld, hold X (or Shift) to move at 1.45x
+   speed with a 1.45x-speed walk animation (`image_speed` 0.2 → 0.29). The
+   boost is applied after each frame's movement and collision resolution and
+   re-checked with `place_meeting` against the wall objects, so it can never
+   push you through geometry; it's disabled during dialogue, menus, and
+   cutscenes. Note the random-encounter counter ticks per frame moved, so
+   running covers 1.45x ground per tick — running is also a (gentle) way to
+   see fewer encounters per distance.
+2. **The set bonus is a second page now.** Checking the Old Tutu or Ballet
+   Shoes via item INFO reads like the vanilla Punch Card: page 1 is the
+   normal description, press Z and page 2 shows the SET BONUS lines, press Z
+   to close — no grown text box. The Japanese mirror is split to match
+   (`item_desc_24_1` / `item_desc_25_1`).
+3. **Bonus fix:** the Torn Notebook's second INFO page (the INV explanation)
+   was unreachable forever — `item_desc_45_0` ended with `/%` (close) instead
+   of `/` (advance). Now readable.
+4. **Third voice pass, 78 lines, opus-reviewed.** Fight-count taunts 5-11
+   rebuilt ("mutant hand" twice → a finger-count arc and a half-dozen bakery
+   arc that pays off F12's "like eggs"; the spider fact was wrong — spiders
+   have legs, not fingers — and the punchline apologized for the joke; "the
+   big one-oh" → "double digits."); the post-kill tiers swapped
+   fortune-cookie lines for concrete material (a doubled Grillby's tab he
+   insists is "counting wrong", dust doing his sentry-station job for him,
+   Papyrus's saved plate he doesn't remember eating, echo flowers repeating
+   words he doesn't remember saying, penciling his own death in like a
+   dentist appointment, tipping the reaper); the corridor post-kill greetings
+   decay across tiers (heya → hey → oh, hey → well → silence → a hollow
+   heya); "welp." openers cut from 8 pages to 2; two 5-line death-screen
+   pages rewrapped to 4. The SK1-5 rule (he doesn't know he died) re-verified
+   clean across all 90 lines.
+5. **Housekeeping:** `sw.js` CACHE_VERSION was stale since v2.9 (README says
+   keep it in sync) — now bumped with each release again.
+   `CACHE_VERSION → v3.0`, `SIZES.part5 = 20043444`; lang mirrors regenerated
+   (en 17251 / ja 16457 keys).
+
+**v2.9 — the death text fully recut, and Sans learns (slowly) that something
+is very wrong.**
+
+1. **A kill counter he doesn't know about.** New `[Sans] SK` in
+   undertale.ini, incremented when Sans actually dies (`obj_sansb_body`
+   death sequence). The game-over screen reads it: before your first kill
+   you get the 400-series interrupts (Asgore's speech replaced by one of 15
+   Sans lines cycling by fight count — no trailing "..." anymore, he steps
+   on the king's line sharp); after you've killed him you get the new
+   **500-series: 90 lines in 6 tiers of 15**, cycling by fight count.
+2. **SK tiers 1-5: he doesn't know.** Dying to him after killing him plays
+   faint wrongness only — déjà vu, bones aching, a nap that felt too long, a
+   dream where nobody wakes him up. No memory of death, no "last time".
+   **Tier 6+:** he's deduced it ("when you die, you come back. when i die,
+   i'm supposed to take the long nap." / "do me a favor, pal. make it quick
+   next time.").
+3. **Corridor post-kill greetings** in the same 6 tiers, ending on the
+   payoff against his canon dying words: "i'm going to grillby's. ...
+   that's what i said last time, isn't it?"
+4. **The glowing eye is in his socket.** Two new frames on
+   `spr_face_sansnoeyes` (cyan/yellow flicker drawn IN the right socket —
+   it used to float low over the nose), wired to a new `faceemotion 5` so
+   every other no-eyes use stays stock. The F17 finale uses it.
+5. **Dialoguer boxes auto-grow** (line-count simulation incl. comicsans
+   kerning) for any page that would exceed 3 lines — dormant safety net now
+   that every page fits, but nothing overflows either.
+
 **v2.8 — the taunts polished, the finale finds its voice, and Sans cuts
 Asgore off on every single death.**
 
