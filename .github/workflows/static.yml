@@ -41,3 +41,7 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Backend file sync can stall well past the 10-minute default on a
+          # ~200 MB site; give it 30 minutes before aborting.
+          timeout: 1800000
