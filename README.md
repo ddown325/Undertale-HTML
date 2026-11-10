@@ -24,6 +24,53 @@ Besides the vanilla game, this build adds a few extras. (All of the game-data
 extras below shipped in **game data v1.1** — the loading-screen footer shows
 the current version; if you're on an older offline copy, re-download it.)
 
+**v3.4 — Toriel sprints in the right room, and Undyne the Undying gets the full
+death treatment (without ever catching on).**
+
+1. **The long hallway works the way you'd expect.** Toriel's sprint tiers from
+   v3.3 landed in the wrong rooms: she sped up when you ran in the first save
+   room (calm escort — made no sense) but NOT in the long pillar hallway where
+   she's actually leaving you behind. Now: save room is back to vanilla, and in
+   the hallway (room_ruins6) she reacts to your sprint — 5 when you start
+   running, 6 when you're within 220px, 7 within 120px, with the walk
+   animation scaling to match. Sprint (4.35 px/f) can never catch her sprint;
+   walk (3) never catches her walk. The "she leaves you behind" scene stays
+   true.
+2. **Ten power-up speeches, and she never knows you came back.** Like the Sans
+   fight-count system, but the mirror image: every time you die to Undyne the
+   Undying and re-enter, her pre-fight speech is different (10 variants, capped,
+   then the 10th repeats) — the inner voice, the human cartoon Alphys showed
+   her, Royal Guard duty, the kid she took the hit for, fire forging the spear,
+   determination itself, her fishing days, what you are, hope as a spear, and
+   the tired hero who showed up early. Not one line winks at returns — each
+   reads like it could be the first time. First-ever fight keeps the vanilla
+   18-page speech untouched.
+3. **She takes over the game-over screen.** Die to the Undying and Asgore says
+   nothing at all — no cut-off speech, no interrupt. Ten sets of Undyne's
+   victory lines cycle by death count (triumph → coaching → the protector →
+   the vow → worn out), voiced with the Undying's sound on the big game-over
+   text. On the 10th (and every death after), her farewell ends quietly —
+   "Guess I burned a little too bright this time" — and the dust sound plays
+   when she finishes talking. Because she would die anyways.
+4. **The reload-after-kill ladder.** Kill her, reload, and come back: 1st
+   reload she's fired up and utterly convinced nothing can take her down (pure
+   dramatic irony), 2nd reload she half-notices the look on your face and
+   dismisses it, 3rd and after she reads your expression and *knows* — "You've
+   done this before. You've cut me down before." — no memory, just deduction,
+   answered with pure Undyne defiance: every time you come back, she'll be
+   standing right there.
+5. **1-in-10: the transformation that shouldn't happen.** Kill normal-route
+   Undyne and there's a 10% chance the fight ends differently: her dying surge
+   actually ignites — white flash, the canon transformation sound and music,
+   the full Undying body — "You're gonna have to try a little harder than
+   THAT!" — and then the borrowed determination slips ("A hero's power was
+   never mine to keep"), she melts the Undying way and dies right after, with
+   "...Somebody will stop you. I, UNDYNE, GUARANTEE IT!" The route ends
+   exactly like a normal kill (same kill/XP/plot flags), so nothing downstream
+   changes.
+6. `CACHE_VERSION → v3.4` (index.html + sw.js); lang mirrors regenerated
+   (en 17408 keys); md5 manifest updated.
+
 **v3.1 — the eye finally sits in the socket, and seven lines get the canon pass.**
 
 1. **The glowing eye is fixed for real.** The game-over eye frames on
